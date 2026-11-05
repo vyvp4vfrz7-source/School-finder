@@ -398,13 +398,17 @@ function renderHome() {
 
 // Latest headline results for a school, for lists and tables.
 function headline(urn) {
-  const k4 = state.results.ks4?.[urn], k5 = state.results.ks5?.[urn];
+  const k2 = state.results.ks2?.[urn], k4 = state.results.ks4?.[urn], k5 = state.results.ks5?.[urn];
   const last = (o) => (o ? o[Object.keys(o).sort().at(-1)] : null);
-  const g = last(k4), a = last(k5);
+  const p = last(k2), g = last(k4), a = last(k5);
   return {
-    em5: g?.em5 ?? null, att8: g?.att8 ?? null,
+    rwm: p?.rwm ?? null, em5: g?.em5 ?? null, att8: g?.att8 ?? null,
     alevel: a?.grade ?? null, aps: a?.aps ?? null,
-    text: [g?.em5 != null ? `GCSE ${Math.round(g.em5)}% grade 5+` : null, a?.grade ? `A level ${a.grade}` : null].filter(Boolean).join(" · "),
+    text: [
+      p?.rwm != null ? `SATs ${Math.round(p.rwm)}% expected standard` : null,
+      g?.em5 != null ? `GCSE ${Math.round(g.em5)}% grade 5+` : null,
+      a?.grade ? `A level ${a.grade}` : null,
+    ].filter(Boolean).join(" · "),
   };
 }
 
@@ -420,13 +424,15 @@ function refreshList() {
   const sorters = {
     name: (a, b) => a.s.name.localeCompare(b.s.name),
     distance: (a, b) => (a.d ?? 0) - (b.d ?? 0),
+    sats: desc("rwm"),
     gcse: desc("em5"),
     alevel: desc("aps"),
   };
+  if (sortBy === "sats") items = items.filter((x) => x.h.rwm != null);
   if (sortBy === "gcse") items = items.filter((x) => x.h.em5 != null);
   if (sortBy === "alevel") items = items.filter((x) => x.h.aps != null);
   items.sort(sorters[sortBy] || sorters.name);
-  const label = { name: "A to Z", distance: "nearest first", gcse: "best GCSE results first", alevel: "best A-level results first" }[sortBy];
+  const label = { name: "A to Z", distance: "nearest first", sats: "best primary SATs first", gcse: "best GCSE results first", alevel: "best A-level results first" }[sortBy];
   $("#list-count").textContent = `${items.length} schools · ${label}`;
   list.innerHTML = items.slice(0, 300).map(({ s, d, h }) => `
     <li tabindex="0" data-urn="${s.urn}">
@@ -485,13 +491,25 @@ function catchmentCard(s) {
 }
 
 function resultsCard(s) {
+  const k2 = state.results.ks2?.[s.urn];
   const k4 = state.results.ks4?.[s.urn];
   const k5 = state.results.ks5?.[s.urn];
-  if (!k4 && !k5) {
-    if (s.phase === "primary" || s.phase === "nursery") return "";
-    return `<div class="card"><h3>Exam results</h3><div class="empty">No published GCSE or A-level results found${s.independent ? " (many independent schools do not report)" : ""}.</div></div>`;
+  if (!k2 && !k4 && !k5) {
+    if (s.phase === "nursery") return "";
+    const what = s.phase === "primary" ? "end-of-primary (SATs)" : "GCSE or A-level";
+    return `<div class="card"><h3>Results</h3><div class="empty">No published ${what} results found${s.independent ? " (independent schools do not have to report them)" : s.ages?.[1] && s.ages[1] < 11 ? " (infant schools have no year 6)" : ""}.</div></div>`;
   }
-  let html = `<div class="card"><h3>Exam results</h3>`;
+  let html = `<div class="card"><h3>Results</h3>`;
+  if (k2) {
+    const yrs = Object.keys(k2).sort();
+    const latest = k2[yrs.at(-1)];
+    html += `<p class="small"><strong>End of primary, year 6 SATs</strong> (latest ${yrs.at(-1)})</p><div class="kpis">
+      <div class="kpi"><div class="v">${latest.rwm != null ? latest.rwm + "%" : "–"}</div><div class="l">Expected standard in reading, writing and maths</div></div>
+      <div class="kpi"><div class="v">${latest.rwmHigh != null ? latest.rwmHigh + "%" : "–"}</div><div class="l">Higher standard</div></div>
+      ${latest.read != null || latest.maths != null ? `<div class="kpi"><div class="v">${latest.read ?? "–"} / ${latest.maths ?? "–"}</div><div class="l">Reading / maths score (100 = expected)</div></div>` : ""}
+    </div>
+    <p class="small muted">Expected standard in reading, writing and maths by year</p>${lineChart(yrs.map((y) => ({ k: y, v: k2[y].rwm })), { fmt: (v) => Math.round(v) + "%" })}`;
+  }
   if (k4) {
     const yrs = Object.keys(k4).sort();
     const latest = k4[yrs.at(-1)];
@@ -513,7 +531,7 @@ function resultsCard(s) {
     </div>
     <p class="small muted">Average points per A-level entry (A* = 60, A = 50, B = 40)</p>${lineChart(yrs.map((y) => ({ k: y, v: k5[y].aps })), { fmt: (v) => v.toFixed(1) })}`;
   }
-  html += `<p class="note">Year shown is the summer exams were sat. No exams were sat in 2020 or 2021, and Progress 8 is not published for 2025 and 2026. Source: DfE.</p></div>`;
+  html += `<p class="note">Year shown is the summer the tests or exams were sat. Progress 8 is not published for 2025 and 2026. Source: DfE.</p></div>`;
   return html;
 }
 
