@@ -7,28 +7,62 @@ Source: https://get-information-schools.service.gov.uk/Downloads (Open Governmen
 import csv
 import datetime as dt
 import io
+import json
+import re
+import time
+import zipfile
 
 from pyproj import Transformer
 
-from .common import LAS, RAW, SITE_DATA, get, write_json
+from .common import LAS, RAW, SITE_DATA, get, session, write_json
 
-GIAS_URL = "https://ea-edubasepublic-prod.azurewebsites.net/edubase/downloads/public/edubasealldata{date}.csv"
+GIAS = "https://get-information-schools.service.gov.uk"
+GIAS_FILE = "https://ea-edubase-api-prod.azurewebsites.net/edubase/downloads/File.xhtml?id={id}"
 
 to_wgs84 = Transformer.from_crs("EPSG:27700", "EPSG:4326", always_xy=True)
 
 
 def download():
-    today = dt.date.today()
-    for back in range(0, 10):
-        d = (today - dt.timedelta(days=back)).strftime("%Y%m%d")
-        url = GIAS_URL.format(date=d)
-        r = get(url, timeout=300)
-        if r.status_code == 200 and len(r.content) > 1_000_000:
-            print(f"  GIAS file {d}: {len(r.content) // 1_000_000} MB")
-            RAW.mkdir(parents=True, exist_ok=True)
-            (RAW / "gias.csv").write_bytes(r.content)
-            return r.content.decode("cp1252", errors="replace"), d
-    raise RuntimeError("Could not download a GIAS file from the last 10 days")
+    """GIAS builds the full extract on request: read the form token, ask for the
+    'all establishment data' file, wait for it, then fetch the ZIP."""
+    page = get(f"{GIAS}/Downloads", timeout=120).text
+    token = re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', page, re.I)
+    gen = re.search(r'id="Downloads_0__FileGeneratedDate"[^>]*value="([^"]+)"', page, re.I) \
+        or re.search(r'value="([^"]+)"[^>]*id="Downloads_0__FileGeneratedDate"', page, re.I)
+    if not token or not gen:
+        raise RuntimeError("GIAS Downloads page changed: token or file date not found")
+    r = session.post(f"{GIAS}/Downloads/Collate", data={
+        "__RequestVerificationToken": token.group(1),
+        "Downloads[0].Tag": "all.edubase.data",
+        "Downloads[0].FileGeneratedDate": gen.group(1),
+        "Downloads[0].Selected": "true",
+    }, timeout=120, allow_redirects=True)
+    m = re.search(r"/Downloads/Generated/([0-9a-fA-F-]{36})", r.url) \
+        or re.search(r"/Downloads/Generated/([0-9a-fA-F-]{36})", r.text)
+    if not m:
+        raise RuntimeError(f"GIAS did not return a generation id (HTTP {r.status_code})")
+    gid = m.group(1)
+    for _ in range(150):
+        p = get(f"{GIAS}/Downloads/GenerateAjax/{gid}", headers={"X-Requested-With": "XMLHttpRequest"})
+        data = p.json()
+        if isinstance(data, str):
+            data = json.loads(data)
+        if data.get("status") is True:
+            break
+        time.sleep(2)
+    else:
+        raise RuntimeError("GIAS file generation timed out")
+    z = get(GIAS_FILE.format(id=gid), timeout=600).content
+    if z[:2] != b"PK":
+        raise RuntimeError("GIAS download was not a ZIP file")
+    with zipfile.ZipFile(io.BytesIO(z)) as zf:
+        name = next(n for n in zf.namelist() if n.lower().endswith(".csv"))
+        raw = zf.read(name)
+    RAW.mkdir(parents=True, exist_ok=True)
+    (RAW / "gias.csv").write_bytes(raw)
+    stamp = re.sub(r"\D", "", name)[-8:] or dt.date.today().strftime("%Y%m%d")
+    print(f"  GIAS file {name}: {len(raw) // 1_000_000} MB")
+    return raw.decode("cp1252", errors="replace"), stamp
 
 
 def phase_group(row):

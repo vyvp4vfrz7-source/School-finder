@@ -5,10 +5,12 @@ A failing step is reported and the others still run, so one slow or broken
 source never blocks the rest of the site's data.
 """
 
+import os
 import sys
 import time
 import traceback
 
+from .common import SITE_DATA
 from . import catchments, coverage, crime, prices, results, schools
 
 STEPS = {
@@ -20,12 +22,19 @@ STEPS = {
     "coverage": coverage.run,
 }
 
+# Steps that take a long time; a push-triggered run reuses their last output.
+SLOW = {"crime": "crime.json", "prices": "sales.json"}
+
 
 def main(argv):
     wanted = argv or list(STEPS)
     failed = []
+    quick = os.environ.get("QUICK") == "1"
     for name in wanted:
         print(f"== {name}")
+        if quick and name in SLOW and (SITE_DATA / SLOW[name]).exists():
+            print("   skipped (QUICK=1 and data already present)")
+            continue
         t = time.time()
         try:
             rc = STEPS[name]()

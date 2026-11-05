@@ -38,6 +38,8 @@ jobs:
       - name: Run pipeline
         env:
           OFCOM_API_KEY: ${{ secrets.OFCOM_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+          QUICK: ${{ github.event_name == 'push' && '1' || '0' }}
         run: python -m pipeline.run_all ${{ github.event.inputs.steps }}
       - name: Commit refreshed data
         if: always()
