@@ -184,7 +184,7 @@ def run():
         if not urn_col:
             continue
         used.append(f["title"])
-        n = 0
+        n = skipped = 0
         for row in reader:
             try:
                 urn = str(int(row[urn_col]))
@@ -200,6 +200,9 @@ def run():
             elif graded:
                 rec = {"scheme": "graded", "date": col("oeif"), "published": col("oeifPub"), "g": graded}
             else:
+                skipped += 1
+                if skipped <= 3:
+                    print(f"    no grades for URN {urn}: { {k: v for k, v in row.items() if v and v.strip()} }")
                 continue
             if col("ungraded") and (rec["date"] or "") < col("ungraded"):
                 outcome = (row.get(dcols["ungradedOutcome"]) or "").strip() if dcols.get("ungradedOutcome") else ""
@@ -212,7 +215,7 @@ def run():
             if not old or (rec.get("date") or "") > (old.get("date") or ""):
                 out[urn] = rec
             n += 1
-        print(f"    {n} schools read")
+        print(f"    {n} schools read, {skipped} without any grade")
         if n and len(out) > 15000:
             break
     if not out:
