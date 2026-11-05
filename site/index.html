@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>School Finder · Sutton and Kingston pilot</title>
-  <meta name="description" content="Find schools, estimated catchments, exam results, crime, mobile signal and sold prices around any address in Sutton and Kingston upon Thames.">
+  <title>School Finder · England</title>
+  <meta name="description" content="Find schools, exam results, Ofsted outcomes, crime and sold prices around any address in England, with estimated catchments in Sutton and Kingston upon Thames.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -16,12 +16,12 @@
     <a class="brand" href="./" aria-label="School Finder home">
       <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 3 1 9l11 6 9-4.9V17h2V9L12 3zm-7 9.2v4L12 20l7-3.8v-4L12 16l-7-3.8z"/></svg>
       <span>School Finder</span>
-      <span class="pill">Sutton &amp; Kingston pilot</span>
+      <span class="pill">England</span>
     </a>
     <form id="search" class="search" autocomplete="off">
-      <label for="postcode" class="visually-hidden">Postcode</label>
-      <input id="postcode" name="postcode" type="search" placeholder="Enter a postcode, e.g. KT3 3NU" inputmode="text" autocapitalize="characters">
-      <button type="submit">Check area</button>
+      <label for="postcode" class="visually-hidden">Postcode, town or school</label>
+      <input id="postcode" name="postcode" type="search" placeholder="Postcode, town or school name" inputmode="text" autocapitalize="words">
+      <button type="submit">Search</button>
       <p id="search-msg" class="search-msg" role="status" hidden></p>
     </form>
   </header>
@@ -34,7 +34,7 @@
   <template id="tpl-home">
     <section class="intro">
       <h1>Find the right school, then the right home</h1>
-      <p>Search a postcode, or tap the map, to see which secondary schools you would likely get into based on recent "last distance offered" figures, plus exam results, crime, mobile signal and recent sold prices nearby.</p>
+      <p>Search a postcode, town or school anywhere in England, or tap the map, to see nearby schools with their exam results and Ofsted outcomes, plus crime and recent sold prices around the address. In Sutton and Kingston upon Thames you also get your chance of a secondary place from recent "last distance offered" figures.</p>
     </section>
     <section class="filters" aria-label="Filters">
       <div class="chips" id="phase-chips"></div>
@@ -42,7 +42,7 @@
         <label><input type="checkbox" id="f-state" checked> State</label>
         <label><input type="checkbox" id="f-indep"> Independent</label>
         <label><input type="checkbox" id="f-special"> Special</label>
-        <label><input type="checkbox" id="f-catch"> With catchment data</label>
+        <label><input type="checkbox" id="f-catch"> With catchment data (Sutton &amp; Kingston)</label>
       </div>
     </section>
     <section>

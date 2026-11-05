@@ -1,5 +1,7 @@
-// School Finder pilot: a static site, no build step. Data comes from ./data/*.json,
-// produced by the pipeline in /pipeline (see README).
+// School Finder: a static site, no build step. School data comes from ./data/*.json,
+// produced by the pipeline in /pipeline (see README). Schools, results and Ofsted cover
+// England and are split into map tiles; crime and sold prices are asked for live from
+// police.uk and HM Land Registry when someone looks at an area.
 
 const PHASES = {
   primary: { label: "Primary", color: "var(--primary)", hex: "#2563eb" },
@@ -9,6 +11,8 @@ const PHASES = {
   nursery: { label: "Nursery", color: "var(--nursery)", hex: "#be185d" },
 };
 const AREA_RADIUS = 500; // metres, for crime and sold prices around a point
+const MIN_ZOOM = 11;     // schools are loaded and drawn from this zoom level in
+const ENGLAND = [[49.9, -6.4], [55.85, 1.8]];
 const RING_COLORS = ["#0f766e", "#14b8a6", "#5eead4", "#99f6e4", "#ccfbf1"];
 
 const state = {
@@ -16,7 +20,8 @@ const state = {
   byUrn: new Map(),
   catchments: {},
   catchmentSources: {},
-  results: { ks4: {}, ks5: {} },
+  results: { ks2: {}, ks4: {}, ks5: {} },
+  ofsted: {},
   phases: new Set(["primary", "secondary", "all-through"]),
   showState: true,
   showIndep: false,
@@ -45,6 +50,8 @@ function distM(lat1, lon1, lat2, lon2) {
   return 2 * R * Math.asin(Math.sqrt(a));
 }
 async function loadJSON(name) {
+  // A sandboxed preview passes its data in window.SF_DATA instead of files.
+  if (window.SF_DATA) return window.SF_DATA[name] ?? null;
   try {
     const r = await fetch(`data/${name}.json`, { cache: "no-cache" });
     if (!r.ok) return null;
@@ -64,7 +71,7 @@ function restore(key) { try { return JSON.parse(localStorage.getItem(key)); } ca
 // the map then draws homes from the sold-price data instead of map tiles, and postcodes are
 // looked up in a local file instead of postcodes.io.
 const OFFLINE = !!window.SF_OFFLINE;
-const map = L.map("map", { zoomControl: true, preferCanvas: true }).setView([51.385, -0.24], 12);
+const map = L.map("map", { zoomControl: true, preferCanvas: true }).fitBounds(ENGLAND);
 map.attributionControl.setPrefix(false); // keep the data credits, drop the "Leaflet" library link
 if (!OFFLINE) {
   L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
@@ -251,10 +258,44 @@ function visible(s) {
   return s.lat != null;
 }
 
+// ---------- tiles ----------
+// England is split into square tiles (see pipeline/tiles.py); only the ones in view load.
+const tiles = { index: null, loaded: new Map() };
+function tileKeys(bounds) {
+  const d = tiles.index?.tileDeg || 0.25;
+  const keys = [];
+  for (let i = Math.floor(bounds.getSouth() / d); i <= Math.floor(bounds.getNorth() / d); i++)
+    for (let j = Math.floor(bounds.getWest() / d); j <= Math.floor(bounds.getEast() / d); j++)
+      if (tiles.index?.tiles?.[`${i}_${j}`]) keys.push(`${i}_${j}`);
+  return keys;
+}
+function addTile(t) {
+  if (!t) return;
+  for (const s of t.schools) {
+    if (state.byUrn.has(s.urn)) continue;
+    state.schools.push(s);
+    state.byUrn.set(s.urn, s);
+  }
+  for (const ks of ["ks2", "ks4", "ks5"]) Object.assign(state.results[ks], t[ks] || {});
+  Object.assign(state.ofsted, t.ofsted || {});
+}
+function loadTile(key) {
+  if (!tiles.loaded.has(key)) tiles.loaded.set(key, loadJSON(`tiles/${key}`).then(addTile));
+  return tiles.loaded.get(key);
+}
+async function ensureTiles(bounds) {
+  await Promise.all(tileKeys(bounds).map(loadTile));
+}
+const ensureAround = (lat, lon, m = 6000) => ensureTiles(L.latLng(lat, lon).toBounds(m * 2));
+const inView = (s, b) => s.lat != null && b.contains([s.lat, s.lon]);
+
 function drawMarkers() {
   schoolLayer.clearLayers();
   markers.clear();
+  if (map.getZoom() < MIN_ZOOM - 1 && !state.selected) return;
+  const b = map.getBounds().pad(0.3);
   for (const s of state.schools) {
+    if (!inView(s, b)) continue;
     if (!visible(s) && state.selected !== s.urn) continue;
     const p = PHASES[s.phase] || PHASES.secondary;
     const big = s.phase !== "primary" && s.phase !== "nursery";
@@ -302,6 +343,15 @@ function setHome(lat, lon, postcode) {
     .bindTooltip(postcode || "Chosen point").addTo(homeLayer);
   L.circle([lat, lon], { radius: AREA_RADIUS, color: "#e11d48", weight: 1, dashArray: "3 4", fill: false, interactive: false }).addTo(homeLayer);
 }
+
+let moveTimer = null;
+map.on("moveend", () => {
+  clearTimeout(moveTimer);
+  moveTimer = setTimeout(async () => {
+    if (map.getZoom() >= MIN_ZOOM) await ensureTiles(map.getBounds().pad(0.2));
+    if ($("#school-list")) refreshList(); else drawMarkers();
+  }, 150);
+});
 
 map.on("click", async (e) => {
   const { lat, lng } = e.latlng;
@@ -422,7 +472,9 @@ function refreshList() {
   const list = $("#school-list");
   if (!list) return;
   const sortBy = $("#sort")?.value || (state.home ? "distance" : "name");
-  let items = state.schools.filter(visible).map((s) => ({
+  const zoomedOut = map.getZoom() < MIN_ZOOM;
+  const view = map.getBounds();
+  let items = (zoomedOut ? [] : state.schools.filter((s) => inView(s, view) && visible(s))).map((s) => ({
     s, d: state.home ? distM(state.home.lat, state.home.lon, s.lat, s.lon) : null, h: headline(s.urn),
   }));
   const desc = (k) => (a, b) => (b.h[k] ?? -1) - (a.h[k] ?? -1) || a.s.name.localeCompare(b.s.name);
@@ -438,19 +490,23 @@ function refreshList() {
   if (sortBy === "alevel") items = items.filter((x) => x.h.aps != null);
   items.sort(sorters[sortBy] || sorters.name);
   const label = { name: "A to Z", distance: "nearest first", sats: "best primary SATs first", gcse: "best GCSE results first", alevel: "best A-level results first" }[sortBy];
-  $("#list-count").textContent = `${items.length} schools · ${label}`;
+  $("#list-count").textContent = zoomedOut ? "Schools" : `${items.length} schools in view · ${label}`;
   list.innerHTML = items.slice(0, 300).map(({ s, d, h }) => `
     <li tabindex="0" data-urn="${s.urn}">
       <span class="dot" style="background:${(PHASES[s.phase] || PHASES.secondary).color}"></span>
       <div><div class="name">${esc(s.name)}</div>
-      <div class="meta">${esc(PHASES[s.phase]?.label || "")} · ${esc(s.la)}${s.independent ? " · Independent" : ""}${s.selective ? " · Selective" : ""}${state.catchments[s.urn] ? " · Catchment data" : ""}</div>
-      ${h.text ? `<div class="meta results">${esc(h.text)}</div>` : ""}</div>
+      <div class="meta">${esc(PHASES[s.phase]?.label || "")} · ${esc(s.town || s.la)}${s.independent ? " · Independent" : ""}${s.selective ? " · Selective" : ""}${state.catchments[s.urn] ? " · Catchment data" : ""}</div>
+      ${h.text || ofstedShort(s.urn) ? `<div class="meta results">${esc([h.text, ofstedShort(s.urn)].filter(Boolean).join(" · "))}</div>` : ""}</div>
       ${d != null ? `<div class="right">${fmtKm(d)}</div>` : ""}
     </li>`).join("");
   list.onclick = (e) => { const li = e.target.closest("li"); if (li) showSchool(+li.dataset.urn); };
   list.onkeydown = (e) => { if (e.key === "Enter") { const li = e.target.closest("li"); if (li) showSchool(+li.dataset.urn); } };
-  if (!state.schools.length) {
+  if (!tiles.index) {
     list.innerHTML = '<li class="empty">School data has not been generated yet. Run the "Refresh data" workflow.</li>';
+  } else if (zoomedOut) {
+    list.innerHTML = `<li class="empty">Search for a postcode, town or school, or zoom in on the map, to list the schools there. ${tiles.index.schools.toLocaleString()} schools across England.</li>`;
+  } else if (!items.length) {
+    list.innerHTML = '<li class="empty">No schools match these filters in this part of the map.</li>';
   }
 }
 
@@ -465,7 +521,7 @@ function catchmentCard(s) {
   const c = state.catchments[s.urn];
   if (!c) {
     if (s.phase === "secondary" || s.phase === "all-through") {
-      return `<div class="card"><h3>Catchment</h3><div class="empty">No "last distance offered" figures collected for this school yet.</div></div>`;
+      return `<div class="card"><h3>Catchment</h3><div class="empty">No "last distance offered" figures collected for this school yet. Catchment estimates cover Sutton and Kingston upon Thames so far; elsewhere, check the council's admissions booklet.</div></div>`;
     }
     return "";
   }
@@ -540,6 +596,38 @@ function resultsCard(s) {
   return html;
 }
 
+// ---------- Ofsted ----------
+const GRADE_CLASS = {
+  Outstanding: "v-good", Good: "v-good", Exceptional: "v-good", "Strong standard": "v-good", Met: "v-good",
+  "Expected standard": "v-na", "Requires improvement": "v-warn", "Needs attention": "v-warn",
+  Inadequate: "v-bad", "Urgent improvement": "v-bad", "Not met": "v-bad",
+};
+const gradeClass = (g) => GRADE_CLASS[g] || Object.entries(GRADE_CLASS).find(([k]) => g?.toLowerCase().startsWith(k.toLowerCase()))?.[1] || "v-na";
+function ofstedShort(urn) {
+  const o = state.ofsted[urn];
+  if (!o) return "";
+  const yr = o.date ? o.date.slice(0, 4) : "";
+  if (o.g.overall) return `Ofsted ${o.g.overall}${yr ? ` (${yr})` : ""}`;
+  return o.scheme === "report-card" ? `Ofsted report card${yr ? ` ${yr}` : ""}` : `Ofsted inspected${yr ? ` ${yr}` : ""}`;
+}
+function ofstedCard(s) {
+  const o = state.ofsted[s.urn];
+  const link = `<a href="https://reports.ofsted.gov.uk/search?q=${s.urn}" target="_blank" rel="noopener">Read the reports on Ofsted</a>`;
+  if (!o) {
+    if (s.independent) return `<div class="card"><h3>Inspection</h3><div class="empty">Independent schools are inspected by Ofsted or the Independent Schools Inspectorate; their outcomes are not in Ofsted's state school file.</div><p class="note">${link}</p></div>`;
+    return `<div class="card"><h3>Ofsted</h3><div class="empty">No inspection outcome in Ofsted's latest file (new schools often have not been inspected yet).</div><p class="note">${link}</p></div>`;
+  }
+  const labels = tiles.index?.ofstedLabels || {};
+  const rows = Object.entries(o.g).map(([k, g]) => `<tr><td>${esc(labels[k] || k)}</td><td><span class="verdict ${gradeClass(g)}">${esc(g)}</span></td></tr>`).join("");
+  const scheme = o.scheme === "report-card"
+    ? "Report card (the 5-point scale used since November 2025)."
+    : o.g.overall ? "Graded inspection with an overall grade (used until August 2024)."
+    : "Graded inspection without an overall grade (September 2024 to November 2025).";
+  return `<div class="card"><h3>Ofsted${o.date ? ` <span class="small muted">inspected ${esc(o.date)}</span>` : ""}</h3>
+    <table class="t"><tbody>${rows}</tbody></table>
+    <p class="note">${scheme} ${link}.</p></div>`;
+}
+
 function showSchool(urn) {
   const s = state.byUrn.get(urn);
   if (!s) return;
@@ -570,6 +658,7 @@ function showSchool(urn) {
       ${s.fsm != null ? `<div class="kpi"><div class="v">${s.fsm}%</div><div class="l">Free school meals</div></div>` : ""}
     </div>
     ${catchmentCard(s)}
+    ${ofstedCard(s)}
     ${resultsCard(s)}
     <div class="links">
       ${s.website ? `<a class="btn ghost small" href="${esc(/^https?:/.test(s.website) ? s.website : "https://" + s.website)}" target="_blank" rel="noopener">School website</a>` : ""}
@@ -585,8 +674,10 @@ async function showArea() {
   if (!h) return renderHome();
   state.selected = null;
   ringLayer.clearLayers();
-  drawMarkers();
   map.fitBounds(L.latLng(h.lat, h.lon).toBounds(AREA_RADIUS * 6));
+  panel.innerHTML = '<p class="muted small">Loading schools…</p>';
+  await ensureAround(h.lat, h.lon);
+  drawMarkers();
 
   panel.innerHTML = "";
   panel.append(backButton("All schools", renderHome));
@@ -599,7 +690,7 @@ async function showArea() {
   const rows = [];
   for (const [urn, c] of Object.entries(state.catchments)) {
     const s = state.byUrn.get(+urn);
-    if (!s) continue;
+    if (!s || distM(h.lat, h.lon, s.lat, s.lon) > 8000) continue;
     const series = c.series[0];
     const d = distM(h.lat, h.lon, series.from.lat, series.from.lon);
     const ch = chance(series, d);
@@ -611,10 +702,20 @@ async function showArea() {
   rows.sort((a, b) => Math.min(rank[a.ch.cls], a.extra ? rank[a.extra.ch.cls] : 9) - Math.min(rank[b.ch.cls], b.extra ? rank[b.extra.ch.cls] : 9) || a.d - b.d);
   const sec = document.createElement("div");
   sec.className = "card";
-  sec.innerHTML = `<h3>Secondary schools: your chances</h3>
+  if (!rows.length) {
+    // Outside the catchment pilot: nearest state secondaries with results and Ofsted.
+    const near = state.schools.filter((s) => (s.phase === "secondary" || s.phase === "all-through") && !s.independent && !s.special && s.lat)
+      .map((s) => ({ s, d: distM(h.lat, h.lon, s.lat, s.lon) })).sort((a, b) => a.d - b.d).slice(0, 8);
+    sec.innerHTML = `<h3>Nearest state secondary schools</h3>
+      ${near.length ? `<table class="t"><thead><tr><th>School</th><th class="n">Distance</th></tr></thead><tbody>
+      ${near.map(({ s, d }) => `<tr><td><a href="#" data-urn="${s.urn}">${esc(s.name)}</a>
+        <div class="small muted">${esc([headline(s.urn).short, ofstedShort(s.urn), s.selective ? "Selective" : null, s.religion].filter(Boolean).join(" · "))}</div></td>
+        <td class="n">${fmtKm(d)}</td></tr>`).join("")}</tbody></table>` : '<div class="empty">No state secondary schools found within 6 km.</div>'}
+      <p class="note">Catchment estimates ("last distance offered") cover Sutton and Kingston upon Thames so far. Councils publish these figures in their admissions booklets, and we are adding areas one by one.</p>`;
+  } else sec.innerHTML = `<h3>Secondary schools: your chances</h3>
     ${rows.length ? `<table class="t"><thead><tr><th>School</th><th class="n">Distance</th><th>Chance</th></tr></thead><tbody>
     ${rows.slice(0, 14).map((r) => `<tr data-urn="${r.s.urn}" style="cursor:pointer">
-      <td><a href="#" data-urn="${r.s.urn}">${esc(r.s.name)}</a>${headline(r.s.urn).short ? `<div class="small muted">${esc(headline(r.s.urn).short)}</div>` : ""}${r.extra ? `<div class="small muted">${esc(r.extra.label)}: ${r.extra.ch.label}</div>` : ""}</td>
+      <td><a href="#" data-urn="${r.s.urn}">${esc(r.s.name)}</a>${headline(r.s.urn).short || ofstedShort(r.s.urn) ? `<div class="small muted">${esc([headline(r.s.urn).short, ofstedShort(r.s.urn)].filter(Boolean).join(" · "))}</div>` : ""}${r.extra ? `<div class="small muted">${esc(r.extra.label)}: ${r.extra.ch.label}</div>` : ""}</td>
       <td class="n">${fmtKm(r.d)}</td><td><span class="verdict ${r.ch.cls}">${r.ch.label}</span></td></tr>`).join("")}
     </tbody></table>` : '<div class="empty">Catchment data has not been generated yet.</div>'}
     <p class="note">GCSE is the share of pupils with grade 5 or above in English and maths. Chances are based on councils' "last distance offered" over the last 3 to 5 years. Grammar and faith schools allocate by test or faith, so check their admissions rules.</p>`;
@@ -628,8 +729,8 @@ async function showArea() {
     const p = document.createElement("div");
     p.className = "card";
     p.innerHTML = `<h3>Nearest state primary schools</h3><table class="t"><tbody>
-      ${prim.map(({ s, d }) => `<tr><td><a href="#" data-urn="${s.urn}">${esc(s.name)}</a></td><td class="n">${fmtKm(d)}</td></tr>`).join("")}
-      </tbody></table><p class="note">Primary catchment figures are the next step for this pilot.</p>`;
+      ${prim.map(({ s, d }) => `<tr><td><a href="#" data-urn="${s.urn}">${esc(s.name)}</a>${headline(s.urn).short || ofstedShort(s.urn) ? `<div class="small muted">${esc([headline(s.urn).short, ofstedShort(s.urn)].filter(Boolean).join(" · "))}</div>` : ""}</td><td class="n">${fmtKm(d)}</td></tr>`).join("")}
+      </tbody></table><p class="note">Primary catchment figures are not collected yet.</p>`;
     p.onclick = (e) => { const t = e.target.closest("[data-urn]"); if (t) { e.preventDefault(); showSchool(+t.dataset.urn); } };
     panel.append(p);
   }
@@ -659,93 +760,212 @@ function portalLinks(h) {
 }
 
 // ---------- crime ----------
+// Live: police.uk is asked for each of the last 36 months inside a small square around the
+// point, and crimes further than AREA_RADIUS are dropped. Offline (the sandboxed preview),
+// the precomputed pilot grid in data/crime.json is used instead.
+const POLICE = "https://data.police.uk/api";
+const liveCache = new Map();
+function boxAround(lat, lon, m) {
+  const dLat = m / 111320, dLon = m / (111320 * Math.cos((lat * Math.PI) / 180));
+  return [lat - dLat, lon - dLon, lat + dLat, lon + dLon];
+}
+async function pool(items, n, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: n }, async () => {
+    while (next < items.length) { const i = next++; out[i] = await fn(items[i], i); }
+  }));
+  return out;
+}
+async function liveCrime(lat, lon) {
+  const key = `crime:${lat.toFixed(4)},${lon.toFixed(4)}`;
+  if (liveCache.has(key)) return liveCache.get(key);
+  const job = (async () => {
+    const dates = await (await fetch(`${POLICE}/crimes-street-dates`)).json();
+    const ms = [...new Set(dates.map((d) => d.date))].sort().slice(-36);
+    const [s, w, n, e] = boxAround(lat, lon, AREA_RADIUS);
+    const poly = `${s.toFixed(5)},${w.toFixed(5)}:${s.toFixed(5)},${e.toFixed(5)}:${n.toFixed(5)},${e.toFixed(5)}:${n.toFixed(5)},${w.toFixed(5)}`;
+    const cats = {};
+    // Four at a time keeps well under police.uk's limit of 15 requests a second.
+    const months = await pool(ms, 4, async (m, i) => {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const r = await fetch(`${POLICE}/crimes-street/all-crime?poly=${poly}&date=${m}`);
+        if (r.status === 429) { await new Promise((ok) => setTimeout(ok, 1000 * (attempt + 1))); continue; }
+        if (!r.ok) return null;
+        let c = 0;
+        for (const x of await r.json()) {
+          const la = +x.location?.latitude, lo = +x.location?.longitude;
+          if (!la || distM(lat, lon, la, lo) > AREA_RADIUS) continue;
+          c++;
+          if (i >= ms.length - 12) cats[x.category] = (cats[x.category] || 0) + 1;
+        }
+        return c;
+      }
+      return null;
+    });
+    if (months.every((v) => v == null)) throw new Error("police.uk returned nothing");
+    return { labels: ms, months: months.map((v) => v ?? 0), cats, gaps: months.filter((v) => v == null).length, live: true };
+  })();
+  liveCache.set(key, job);
+  job.catch(() => liveCache.delete(key));
+  return job;
+}
 function crimeAround(crime, lat, lon, radius) {
   const [oLat, oLon] = crime.origin, [cLat, cLon] = crime.cell;
   const ci = Math.floor((lat - oLat) / cLat), cj = Math.floor((lon - oLon) / cLon);
   const ri = Math.ceil(radius / 111320 / cLat) + 1, rj = Math.ceil(radius / 69500 / cLon) + 1;
   const months = new Array(crime.months.length).fill(0);
   const cats = new Array(crime.categories.length).fill(0);
+  let hit = false;
   for (let i = ci - ri; i <= ci + ri; i++) {
     for (let j = cj - rj; j <= cj + rj; j++) {
       const cell = crime.cells[`${i},${j}`];
       if (!cell) continue;
       const clat = oLat + (i + 0.5) * cLat, clon = oLon + (j + 0.5) * cLon;
       if (distM(lat, lon, clat, clon) > radius) continue;
+      hit = true;
       cell[0].forEach((v, k) => (months[k] += v));
       cell[1].forEach((v, k) => (cats[k] += v));
     }
   }
-  return { months, cats };
+  return { months, cats, hit };
 }
-
-let typicalCrime = null;
-function crimeTypical(crime) {
-  if (typicalCrime != null) return typicalCrime;
-  // Typical 12-month count for a circle this size: median over school locations.
-  const n = crime.months.length;
-  const totals = state.schools.filter((s) => s.lat).map((s) => {
-    const { months } = crimeAround(crime, s.lat, s.lon, AREA_RADIUS);
-    return months.slice(n - 12).reduce((a, b) => a + b, 0);
-  });
-  typicalCrime = median(totals);
-  return typicalCrime;
+async function storedCrime(lat, lon) {
+  const crime = await getLazy("crime");
+  if (!crime) return null;
+  const { months, cats, hit } = crimeAround(crime, lat, lon, AREA_RADIUS);
+  if (!hit) return null;
+  return { labels: crime.months, months, cats: Object.fromEntries(crime.categories.map((c, i) => [c, cats[i]])), live: false };
+}
+// Where a 12-month count sits among school neighbourhoods across England (0 to 100).
+function crimePercentile(base, total) {
+  const p = base?.percentiles;
+  if (!p?.length) return null;
+  let i = 0;
+  while (i < p.length - 1 && p[i + 1] <= total) i++;
+  return Math.min(100, i * 5);
 }
 
 async function renderCrime(el, h) {
-  const crime = await getLazy("crime");
-  if (!crime) { el.innerHTML = "<h3>Crime</h3><div class='empty'>Crime data has not been generated yet.</div>"; return; }
-  const { months, cats } = crimeAround(crime, h.lat, h.lon, AREA_RADIUS);
+  el.innerHTML = `<h3>Crime within ${AREA_RADIUS} m</h3><p class="muted small">${OFFLINE ? "Loading…" : "Asking police.uk for the last three years…"}</p>`;
+  let data = null;
+  if (!OFFLINE) { try { data = await liveCrime(h.lat, h.lon); } catch (e) { console.warn(e); } }
+  if (!data) data = await storedCrime(h.lat, h.lon);
+  if (!data) {
+    el.innerHTML = `<h3>Crime</h3><div class="empty">${OFFLINE ? "This preview has crime figures for Sutton and Kingston only; the live site asks police.uk for any address in England." : "police.uk did not answer just now. Try again in a minute."}</div>
+      <p class="note"><a href="https://www.police.uk/" target="_blank" rel="noopener">Check on police.uk</a></p>`;
+    return;
+  }
+  const { months, labels } = data;
   const n = months.length;
   const sum = (a, b) => months.slice(Math.max(0, a), b).reduce((x, y) => x + y, 0);
   const last12 = sum(n - 12, n), prev12 = sum(n - 24, n - 12), prev24 = sum(n - 36, n - 24);
-  const typical = crimeTypical(crime);
-  const vsTyp = typical ? last12 / typical : null;
-  const cls = vsTyp == null ? "v-na" : vsTyp < 0.8 ? "v-good" : vsTyp <= 1.25 ? "v-warn" : "v-bad";
-  const lbl = vsTyp == null ? "" : vsTyp < 0.8 ? "Below typical" : vsTyp <= 1.25 ? "About typical" : "Above typical";
+  const base = await getLazy("crime_baseline");
+  const pct = crimePercentile(base, last12);
+  const cls = pct == null ? "v-na" : pct < 40 ? "v-good" : pct <= 70 ? "v-warn" : "v-bad";
+  const lbl = pct == null ? "" : pct < 40 ? "Quieter than most" : pct <= 70 ? "About typical" : "Busier than most";
   const change = prev12 ? Math.round(((last12 - prev12) / prev12) * 100) : null;
-  const top = crime.categories.map((c, i) => ({ c, v: cats[i] })).filter((x) => x.v).sort((a, b) => b.v - a.v).slice(0, 6);
+  const top = Object.entries(data.cats).map(([c, v]) => ({ c, v })).filter((x) => x.v).sort((a, b) => b.v - a.v).slice(0, 6);
   const maxV = top[0]?.v || 1;
-  const yearLabel = (end) => crime.months[end - 1]?.slice(0, 7);
-  el.innerHTML = `<h3>Crime within ${AREA_RADIUS} m <span class="verdict ${cls}">${lbl}</span></h3>
+  const yearLabel = (end) => labels[end - 1]?.slice(0, 7);
+  el.innerHTML = `<h3>Crime within ${AREA_RADIUS} m ${lbl ? `<span class="verdict ${cls}">${lbl}</span>` : ""}</h3>
     <div class="kpis">
       <div class="kpi"><div class="v">${last12.toLocaleString()}</div><div class="l">Crimes, last 12 months</div></div>
       <div class="kpi"><div class="v">${change == null ? "–" : (change > 0 ? "+" : "") + change + "%"}</div><div class="l">vs previous 12 months</div></div>
-      <div class="kpi"><div class="v">${typical != null ? Math.round(typical).toLocaleString() : "–"}</div><div class="l">Typical for the pilot area</div></div>
+      ${pct != null ? `<div class="kpi"><div class="v">${base.percentiles[10].toLocaleString()}</div><div class="l">Typical school neighbourhood in England</div></div>` : ""}
     </div>
+    ${pct != null ? `<p class="small">More crime than around ${pct}% of school neighbourhoods in England.</p>` : ""}
     <p class="small muted">12-month totals, to the month shown</p>
     ${lineChart([{ k: yearLabel(n - 24), v: n >= 36 ? prev24 : null }, { k: yearLabel(n - 12), v: n >= 24 ? prev12 : null }, { k: yearLabel(n), v: last12 }], { fmt: (v) => v.toLocaleString() })}
     <p class="small muted">Most common, last 12 months</p>
     <div class="bars">${top.map((t) => `<div class="bar"><div class="lab"><span>${esc(catLabel(t.c))}</span><span>${t.v}</span></div><div class="track"><div class="fill" style="width:${(t.v / maxV) * 100}%"></div></div></div>`).join("")}</div>
-    <p class="note">police.uk street-level data, ${esc(crime.months[0])} to ${esc(crime.months.at(-1))}. Locations are approximate by design. A busy high street or station nearby raises the count.</p>`;
+    <p class="note">police.uk street-level data, ${esc(labels[0])} to ${esc(labels.at(-1))}${data.live ? ", fetched live" : ""}${data.gaps ? ` (${data.gaps} months did not load)` : ""}. Locations are approximate by design. A busy high street or station nearby raises the count.${pct != null ? ` England comparison from ${base.samples} school neighbourhoods.` : ""}</p>`;
 }
 
 // ---------- prices ----------
-async function renderPrices(el, h) {
+// Live: postcodes.io lists the postcodes within AREA_RADIUS, then HM Land Registry's
+// SPARQL endpoint returns their sales. Offline, the pilot's data/sales.json is used.
+const LR_SPARQL = "https://landregistry.data.gov.uk/landregistry/query";
+const LR_TYPES = { detached: "D", "semi-detached": "S", terraced: "T", "flat-maisonette": "F", otherPropertyType: "O" };
+const SALE_TYPES = { D: "Detached", S: "Semi-detached", T: "Terraced", F: "Flat", O: "Other" };
+async function livePrices(lat, lon) {
+  const key = `prices:${lat.toFixed(4)},${lon.toFixed(4)}`;
+  if (liveCache.has(key)) return liveCache.get(key);
+  const job = (async () => {
+    const pr = await (await fetch(`https://api.postcodes.io/postcodes?lon=${lon}&lat=${lat}&radius=${AREA_RADIUS}&limit=100`)).json();
+    const pcs = (pr.result || []).map((p) => [p.postcode, p.latitude, p.longitude]);
+    if (!pcs.length) return { rows: [], capped: false };
+    const where = Object.fromEntries(pcs.map(([pc, la, lo]) => [pc, [la, lo]]));
+    const since = `${new Date().getFullYear() - 5}-01-01`;
+    const q = `PREFIX lrppi: <http://landregistry.data.gov.uk/def/ppi/>
+PREFIX lrcommon: <http://landregistry.data.gov.uk/def/common/>
+PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
+SELECT ?pc ?price ?date ?type ?newBuild ?estate ?paon ?saon ?street WHERE {
+  VALUES ?pc { ${pcs.map(([pc]) => `"${pc.replace(/[^A-Z0-9 ]/gi, "")}"^^xsd:string`).join(" ")} }
+  ?addr lrcommon:postcode ?pc .
+  ?tx lrppi:propertyAddress ?addr ; lrppi:pricePaid ?price ; lrppi:transactionDate ?date ;
+      lrppi:propertyType ?type ; lrppi:transactionCategory lrppi:standardPricePaidTransaction .
+  OPTIONAL { ?tx lrppi:newBuild ?newBuild } OPTIONAL { ?tx lrppi:estateType ?estate }
+  OPTIONAL { ?addr lrcommon:paon ?paon } OPTIONAL { ?addr lrcommon:saon ?saon } OPTIONAL { ?addr lrcommon:street ?street }
+  FILTER (?date >= "${since}"^^xsd:date)
+} ORDER BY DESC(?date) LIMIT 3000`;
+    const r = await fetch(LR_SPARQL, { method: "POST", body: new URLSearchParams({ query: q }), headers: { Accept: "application/sparql-results+json" } });
+    if (!r.ok) throw new Error(`Land Registry HTTP ${r.status}`);
+    const j = await r.json();
+    const v = (b, k) => b[k]?.value ?? "";
+    const title = (t) => t.toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+    const rows = j.results.bindings.map((b) => {
+      const pc = v(b, "pc"), loc = where[pc] || [lat, lon];
+      const saon = v(b, "saon"), paon = v(b, "paon"), street = title(v(b, "street"));
+      return [loc[0], loc[1], +v(b, "price"), v(b, "date").slice(0, 10), LR_TYPES[v(b, "type").split("/").pop()] || "O",
+        v(b, "newBuild") === "true" ? 1 : 0, v(b, "estate").endsWith("leasehold") ? "L" : "F",
+        [saon ? saon + "," : "", paon, street].filter(Boolean).join(" "), pc];
+    });
+    return { rows, capped: pcs.length >= 100, live: true };
+  })();
+  liveCache.set(key, job);
+  job.catch(() => liveCache.delete(key));
+  return job;
+}
+async function storedPrices(h) {
   const sales = await getLazy("sales");
-  if (!sales) { el.innerHTML = "<h3>Sold prices</h3><div class='empty'>Sold price data has not been generated yet.</div>"; return; }
-  const near = sales.rows.filter((r) => Math.abs(r[0] - h.lat) < 0.006 && Math.abs(r[1] - h.lon) < 0.01 && distM(h.lat, h.lon, r[0], r[1]) <= AREA_RADIUS);
-  if (!near.length) { el.innerHTML = `<h3>Sold prices within ${AREA_RADIUS} m</h3><div class="empty">No recorded sales nearby.</div>`; return; }
-  const latestDate = sales.rows[0][3];
+  if (!sales) return null;
+  const rows = sales.rows.filter((r) => Math.abs(r[0] - h.lat) < 0.006 && Math.abs(r[1] - h.lon) < 0.01 && distM(h.lat, h.lon, r[0], r[1]) <= AREA_RADIUS);
+  if (!rows.length && !sales.rows.some((r) => distM(h.lat, h.lon, r[0], r[1]) < 3000)) return null; // outside the pilot
+  return { rows, live: false };
+}
+
+async function renderPrices(el, h) {
+  el.innerHTML = `<h3>Sold prices within ${AREA_RADIUS} m</h3><p class="muted small">${OFFLINE ? "Loading…" : "Asking HM Land Registry…"}</p>`;
+  let data = null;
+  if (!OFFLINE) { try { data = await livePrices(h.lat, h.lon); } catch (e) { console.warn(e); } }
+  if (!data) data = await storedPrices(h);
+  if (!data) {
+    el.innerHTML = `<h3>Sold prices</h3><div class="empty">${OFFLINE ? "This preview has sold prices for Sutton and Kingston only; the live site asks HM Land Registry for any address in England." : "HM Land Registry did not answer just now. Try again in a minute."}</div>`;
+    return;
+  }
+  const near = [...data.rows].sort((a, b) => (a[3] < b[3] ? 1 : -1));
+  if (!near.length) { el.innerHTML = `<h3>Sold prices within ${AREA_RADIUS} m</h3><div class="empty">No recorded sales nearby in the last five years.</div>`; return; }
+  const latestDate = near[0][3];
   const cutoff = new Date(latestDate); cutoff.setFullYear(cutoff.getFullYear() - 2);
   const recent = near.filter((r) => new Date(r[3]) >= cutoff);
   const byType = {};
   for (const r of recent) (byType[r[4]] ||= []).push(r[2]);
   const byYear = {};
   for (const r of near) (byYear[r[3].slice(0, 4)] ||= []).push(r[2]);
-  const types = sales.types;
   el.innerHTML = `<h3>Sold prices within ${AREA_RADIUS} m</h3>
     <div class="kpis">
       <div class="kpi"><div class="v">${fmtGBP(median(recent.map((r) => r[2])))}</div><div class="l">Median, last 2 years</div></div>
       <div class="kpi"><div class="v">${recent.length}</div><div class="l">Sales, last 2 years</div></div>
     </div>
     <table class="t"><thead><tr><th>Type</th><th class="n">Median</th><th class="n">Sales</th></tr></thead><tbody>
-      ${Object.entries(byType).sort((a, b) => b[1].length - a[1].length).map(([t, v]) => `<tr><td>${esc(types[t] || t)}</td><td class="n">${fmtGBP(median(v))}</td><td class="n">${v.length}</td></tr>`).join("")}
+      ${Object.entries(byType).sort((a, b) => b[1].length - a[1].length).map(([t, v]) => `<tr><td>${esc(SALE_TYPES[t] || t)}</td><td class="n">${fmtGBP(median(v))}</td><td class="n">${v.length}</td></tr>`).join("")}
     </tbody></table>
     <p class="small muted" style="margin-top:10px">Median sold price by year (all types)</p>
     ${lineChart(Object.keys(byYear).sort().map((y) => ({ k: y, v: median(byYear[y]) })), { fmt: fmtGBP })}
     <p class="small muted">Latest sales</p>
-    <table class="t"><tbody>${near.slice(0, 8).map((r) => `<tr><td>${esc(r[7])}<div class="small muted">${esc(types[r[4]] || r[4])}${r[5] ? " · new build" : ""} · ${r[6] === "L" ? "leasehold" : "freehold"}</div></td><td class="n">${fmtGBP(r[2])}<div class="small muted">${esc(r[3])}</div></td></tr>`).join("")}</tbody></table>
-    <p class="note">${esc(sales.attribution)} Sales to ${esc(latestDate)}.</p>`;
+    <table class="t"><tbody>${near.slice(0, 8).map((r) => `<tr><td>${esc(r[7])}<div class="small muted">${esc(SALE_TYPES[r[4]] || r[4])}${r[5] ? " · new build" : ""} · ${r[6] === "L" ? "leasehold" : "freehold"}</div></td><td class="n">${fmtGBP(r[2])}<div class="small muted">${esc(r[3])}</div></td></tr>`).join("")}</tbody></table>
+    <p class="note">Contains HM Land Registry data © Crown copyright and database right ${new Date().getFullYear()}. Sales to ${esc(latestDate)}${data.live ? ", fetched live" : ""}.${data.capped ? " Busy area: the nearest 100 postcodes are included." : ""}</p>`;
 }
 
 // ---------- coverage ----------
@@ -762,7 +982,11 @@ async function renderCoverage(el, h) {
     const d = distM(h.lat, h.lon, v[0], v[1]);
     if (!best || d < best.d) best = { pc, v, d };
   }
-  if (!best || best.d > 400) { el.innerHTML = "<h3>Mobile signal</h3><div class='empty'>No coverage figures for this spot yet.</div>"; return; }
+  if (!best || best.d > 400) {
+    el.innerHTML = `<h3>Mobile signal</h3><div class="empty">Coverage figures are collected for Sutton and Kingston only so far.</div>
+      <p class="note"><a href="https://www.ofcom.org.uk/mobile-coverage-checker" target="_blank" rel="noopener">Check this postcode on Ofcom's coverage checker</a></p>`;
+    return;
+  }
   // Group fields like "EE4GDataIndoor" into operator rows.
   const rows = {};
   cov.fields.forEach((f, i) => {
@@ -780,46 +1004,121 @@ async function renderCoverage(el, h) {
 function footer() {
   const f = document.createElement("div");
   f.className = "footer";
-  f.innerHTML = `Pilot covering Sutton and Kingston upon Thames. Data: DfE (Get Information about Schools, Explore Education Statistics), council admissions booklets, police.uk, HM Land Registry, Ofcom, postcodes.io. Contains public sector information licensed under the Open Government Licence v3.0.`;
+  f.innerHTML = `Schools, results and Ofsted for all of England; catchment estimates for Sutton and Kingston upon Thames. Data: DfE (Get Information about Schools, Explore Education Statistics), Ofsted, council admissions booklets, police.uk, HM Land Registry, Ofcom, postcodes.io. Contains public sector information licensed under the Open Government Licence v3.0.`;
   return f;
 }
 
 // ---------- search ----------
+// One box for a postcode, a postcode district (e.g. "KT3"), a town or a school name.
+const PC_FULL = /^[A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2}$/i;
+const PC_OUT = /^[A-Z]{1,2}\d[A-Z\d]?$/i;
+const PHASE_FROM_CODE = { p: "primary", s: "secondary", a: "all-through", 6: "sixth-form", n: "nursery" };
+async function findSchools(q) {
+  const idx = await getLazy("search");
+  if (!idx) return [];
+  const words = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const hits = [];
+  for (const r of idx.rows) {
+    const name = r[1].toLowerCase();
+    if (words.every((w) => name.includes(w))) hits.push(r);
+    if (hits.length > 400) break;
+  }
+  const ql = q.toLowerCase();
+  hits.sort((a, b) => (b[1].toLowerCase().startsWith(ql) - a[1].toLowerCase().startsWith(ql)) || a[1].localeCompare(b[1]));
+  return hits.slice(0, 12);
+}
+async function findPlaces(q) {
+  if (OFFLINE) return [];
+  try {
+    const j = await (await fetch(`https://api.postcodes.io/places?q=${encodeURIComponent(q)}&limit=20`)).json();
+    const seen = new Set();
+    return (j.result || [])
+      .filter((p) => p.country === "England" && /city|town|village|suburban|hamlet/i.test(p.local_type || ""))
+      .filter((p) => { const k = `${p.name_1}|${p.county_unitary || p.district_borough}`; if (seen.has(k)) return false; seen.add(k); return true; })
+      .slice(0, 6)
+      .map((p) => ({ name: p.name_1, where: p.county_unitary || p.district_borough || p.region || "", lat: p.latitude, lon: p.longitude }));
+  } catch { return []; }
+}
+async function lookupOutcode(q) {
+  if (OFFLINE) return lookupPostcode(q);
+  try {
+    const j = await (await fetch(`https://api.postcodes.io/outcodes/${encodeURIComponent(q)}`)).json();
+    if (j.result) return { lat: j.result.latitude, lon: j.result.longitude, postcode: j.result.outcode.toUpperCase() };
+  } catch {}
+  return null;
+}
+async function openSchool(urn, lat, lon) {
+  if (lat != null) { await ensureAround(lat, lon, 2000); map.setView([lat, lon], 15); }
+  if (!state.byUrn.has(urn)) {
+    const idx = await getLazy("search");
+    const r = idx?.rows.find((x) => x[0] === urn);
+    if (r) await ensureAround(r[4], r[5], 2000);
+  }
+  if (state.byUrn.has(urn)) showSchool(urn);
+}
+function showSearchResults(q, places, schools) {
+  state.selected = null;
+  panel.innerHTML = "";
+  panel.append(backButton(state.home ? "Back to area report" : "All schools", state.home ? showArea : renderHome));
+  const div = document.createElement("div");
+  div.innerHTML = `<h1>Results for “${esc(q)}”</h1>
+    ${places.length ? `<div class="card"><h3>Places</h3><ul class="school-list">${places.map((p, i) => `<li tabindex="0" data-place="${i}"><div><div class="name">${esc(p.name)}</div><div class="meta">${esc(p.where)}</div></div></li>`).join("")}</ul></div>` : ""}
+    ${schools.length ? `<div class="card"><h3>Schools</h3><ul class="school-list">${schools.map((r) => `<li tabindex="0" data-urn="${r[0]}"><span class="dot" style="background:${(PHASES[PHASE_FROM_CODE[r[3]]] || PHASES.secondary).color}"></span><div><div class="name">${esc(r[1])}</div><div class="meta">${esc(PHASES[PHASE_FROM_CODE[r[3]]]?.label || "")} · ${esc(r[2] || "")}${r[6] ? " · Independent" : ""}</div></div></li>`).join("")}</ul></div>` : ""}
+    ${!places.length && !schools.length ? `<div class="empty">Nothing found. Try a full postcode, a town, or part of a school's name.</div>` : ""}`;
+  const pick = (e) => {
+    const li = e.target.closest("li");
+    if (!li) return;
+    if (li.dataset.place != null) {
+      const p = places[+li.dataset.place];
+      map.setView([p.lat, p.lon], 13);
+      renderHome();
+    } else {
+      const r = schools.find((x) => x[0] === +li.dataset.urn);
+      openSchool(r[0], r[4], r[5]);
+    }
+  };
+  div.onclick = pick;
+  div.onkeydown = (e) => { if (e.key === "Enter") pick(e); };
+  panel.append(div, footer());
+  panel.scrollTop = 0;
+}
+
 $("#search").addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = $("#postcode").value.trim();
   const msg = $("#search-msg");
   msg.hidden = true;
   if (!q) return;
-  const hit = await lookupPostcode(q);
-  if (!hit) {
-    msg.textContent = OFFLINE
-      ? `${q.toUpperCase()} isn't in the preview's postcode list. Try a Sutton or Kingston postcode such as KT3 3NU or SM2 6AA, or tap the map.`
-      : `Couldn't find ${q.toUpperCase()}. Check the postcode, or tap the map instead.`;
-    msg.hidden = false;
-    return;
+  if (PC_FULL.test(q) || PC_OUT.test(q)) {
+    const hit = PC_FULL.test(q) ? await lookupPostcode(q) : await lookupOutcode(q);
+    if (hit) {
+      setHome(hit.lat, hit.lon, hit.postcode);
+      showArea();
+      return;
+    }
+    if (PC_FULL.test(q)) {
+      msg.textContent = OFFLINE
+        ? `${q.toUpperCase()} isn't in the preview's postcode list. Try a Sutton or Kingston postcode such as KT3 3NU, search a town or school, or tap the map.`
+        : `Couldn't find ${q.toUpperCase()}. Check the postcode, or tap the map instead.`;
+      msg.hidden = false;
+      return;
+    }
   }
-  setHome(hit.lat, hit.lon, hit.postcode);
-  showArea();
+  const [places, schools] = await Promise.all([findPlaces(q), findSchools(q)]);
+  showSearchResults(q, places, schools);
 });
 
 // ---------- boot ----------
 (async function init() {
-  const [schools, catchments, results] = await Promise.all([loadJSON("schools"), loadJSON("catchments"), loadJSON("results")]);
-  state.schools = schools?.schools || [];
-  state.byUrn = new Map(state.schools.map((s) => [s.urn, s]));
+  const [index, catchments, base] = await Promise.all([loadJSON("index"), loadJSON("catchments"), getLazy("crime_baseline")]);
+  tiles.index = index;
   state.catchments = catchments?.schools || {};
   state.catchmentSources = catchments?.sources || {};
-  if (results) state.results = results;
-  if (state.schools.length) {
-    const b = L.latLngBounds(state.schools.filter((s) => s.lat).map((s) => [s.lat, s.lon]));
-    map.fitBounds(b, { padding: [20, 20] });
-  }
   const params = new URLSearchParams(location.search);
   const saved = restore("home");
   if (params.get("school")) {
     renderHome();
-    showSchool(+params.get("school"));
+    openSchool(+params.get("school"));
   } else if (saved?.lat) {
     setHome(saved.lat, saved.lon, saved.postcode);
     showArea();
