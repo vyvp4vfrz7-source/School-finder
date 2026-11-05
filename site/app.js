@@ -11,7 +11,8 @@ const PHASES = {
   nursery: { label: "Nursery", color: "var(--nursery)", hex: "#be185d" },
 };
 const AREA_RADIUS = 500; // metres, for crime and sold prices around a point
-const MIN_ZOOM = 11;     // schools are loaded and drawn from this zoom level in
+const MILE = 1609.34;
+const RADIUS_CHOICES = [1, 2, 3, 5];
 const ENGLAND = [[49.9, -6.4], [55.85, 1.8]];
 const RING_COLORS = ["#0f766e", "#14b8a6", "#5eead4", "#99f6e4", "#ccfbf1"];
 
@@ -28,6 +29,7 @@ const state = {
   showSpecial: false,
   onlyCatch: false,
   home: null, // {lat, lon, postcode}
+  radiusMi: 3, // schools are listed and drawn within this many miles of home
   selected: null,
 };
 const lazy = {}; // crime, sales, coverage: loaded on first use
@@ -109,10 +111,14 @@ async function drawOfflineBase() {
     drawHomeDots();
     map.attributionControl.addAttribution("Dots are homes sold (HM Land Registry)");
   }
+  const labels = L.layerGroup();
   for (const [name, lat, lon] of TOWNS) {
     L.marker([lat, lon], { interactive: false, keyboard: false,
-      icon: L.divIcon({ className: "", html: `<span class="town-label">${name}</span>`, iconAnchor: [30, 8] }) }).addTo(map);
+      icon: L.divIcon({ className: "", html: `<span class="town-label">${name}</span>`, iconAnchor: [30, 8] }) }).addTo(labels);
   }
+  const toggle = () => (map.getZoom() >= 11 ? labels.addTo(map) : labels.remove());
+  map.on("zoomend", toggle);
+  toggle();
 }
 
 function bboxOf(flat) {
@@ -287,16 +293,18 @@ async function ensureTiles(bounds) {
   await Promise.all(tileKeys(bounds).map(loadTile));
 }
 const ensureAround = (lat, lon, m = 6000) => ensureTiles(L.latLng(lat, lon).toBounds(m * 2));
-const inView = (s, b) => s.lat != null && b.contains([s.lat, s.lon]);
+const radiusM = () => state.radiusMi * MILE;
+const fmtMi = (n) => `${n} mile${n === 1 ? "" : "s"}`;
 
 function drawMarkers() {
   schoolLayer.clearLayers();
   markers.clear();
-  if (map.getZoom() < MIN_ZOOM - 1 && !state.selected) return;
-  const b = map.getBounds().pad(0.3);
+  const h = state.home;
   for (const s of state.schools) {
-    if (!inView(s, b)) continue;
-    if (!visible(s) && state.selected !== s.urn) continue;
+    if (s.lat == null) continue;
+    if (state.selected !== s.urn) {
+      if (!h || !visible(s) || distM(h.lat, h.lon, s.lat, s.lon) > radiusM()) continue;
+    }
     const p = PHASES[s.phase] || PHASES.secondary;
     const big = s.phase !== "primary" && s.phase !== "nursery";
     const m = L.circleMarker([s.lat, s.lon], {
@@ -342,22 +350,30 @@ function setHome(lat, lon, postcode) {
   L.marker([lat, lon], { icon: L.divIcon({ className: "", html: '<div class="home-pin"></div>', iconSize: [18, 18], iconAnchor: [9, 9] }), keyboard: false })
     .bindTooltip(postcode || "Chosen point").addTo(homeLayer);
   L.circle([lat, lon], { radius: AREA_RADIUS, color: "#e11d48", weight: 1, dashArray: "3 4", fill: false, interactive: false }).addTo(homeLayer);
+  drawRadius();
 }
-
-let moveTimer = null;
-map.on("moveend", () => {
-  clearTimeout(moveTimer);
-  moveTimer = setTimeout(async () => {
-    if (map.getZoom() >= MIN_ZOOM) await ensureTiles(map.getBounds().pad(0.2));
-    if ($("#school-list")) refreshList(); else drawMarkers();
-  }, 150);
-});
+let radiusCircle = null;
+function drawRadius() {
+  if (radiusCircle) radiusCircle.remove();
+  if (!state.home) return;
+  radiusCircle = L.circle([state.home.lat, state.home.lon], {
+    radius: radiusM(), color: "#0f766e", weight: 1.5, fill: true, fillOpacity: 0.04, interactive: false,
+  }).addTo(homeLayer);
+}
+function clearHome() {
+  state.home = null;
+  try { localStorage.removeItem("home"); } catch {}
+  homeLayer.clearLayers();
+  radiusCircle = null;
+  map.fitBounds(ENGLAND);
+  renderHome();
+}
 
 map.on("click", async (e) => {
   const { lat, lng } = e.latlng;
   const pc = await nearestPostcode(lat, lng);
   setHome(lat, lng, pc);
-  showArea();
+  renderHome();
 });
 
 // ---------- admission chance ----------
@@ -404,11 +420,75 @@ function lineChart(points, { fmt = (v) => v, height = 90 } = {}) {
 // ---------- views ----------
 const panel = $("#panel");
 
-function renderHome() {
+// On the start screen, every school in England as a faint dot: shows where the data is
+// and invites a tap. Drawn from the small search index, not the full tiles.
+let overview = null;
+async function showOverview(on) {
+  if (!on) { overview?.remove(); return; }
+  if (!overview) {
+    const idx = await getLazy("search");
+    const pts = (idx?.rows || []).map((r) => [r[4], r[5]]);
+    const Dots = L.GridLayer.extend({
+      createTile(coords) {
+        const tile = document.createElement("canvas");
+        const size = this.getTileSize();
+        tile.width = size.x; tile.height = size.y;
+        const ctx = tile.getContext("2d");
+        ctx.fillStyle = isDark() ? "rgba(94,234,212,.35)" : "rgba(15,118,110,.32)";
+        const nw = coords.scaleBy(size);
+        const r = Math.max(0.8, (coords.z - 5) * 0.45);
+        for (const [lat, lon] of pts) {
+          const p = map.project([lat, lon], coords.z).subtract(nw);
+          if (p.x < -3 || p.y < -3 || p.x > size.x + 3 || p.y > size.y + 3) continue;
+          ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 6.283); ctx.fill();
+        }
+        return tile;
+      },
+    });
+    overview = new Dots({ pane: "overlayPane" });
+  }
+  if (!state.home) overview.addTo(map);
+}
+
+function renderStart() {
+  showOverview(true);
   state.selected = null;
   ringLayer.clearLayers();
+  drawMarkers();
+  panel.innerHTML = "";
+  panel.append($("#tpl-start").content.cloneNode(true));
+  const n = tiles.index?.schools;
+  if (n) $("#start-count").textContent = n.toLocaleString();
+  $("#start-form").onsubmit = (e) => { e.preventDefault(); runSearch($("#start-q").value.trim(), $("#start-msg")); };
+  panel.querySelectorAll("[data-example]").forEach((b) => (b.onclick = () => { $("#start-q").value = b.dataset.example; runSearch(b.dataset.example, $("#start-msg")); }));
+  panel.append(footer());
+  $("#start-q").focus({ preventScroll: true });
+}
+
+async function renderHome() {
+  if (!state.home) return renderStart();
+  showOverview(false);
+  state.selected = null;
+  ringLayer.clearLayers();
+  panel.innerHTML = '<p class="muted small">Loading schools…</p>';
+  await ensureAround(state.home.lat, state.home.lon, radiusM() + 500);
+  map.fitBounds(L.latLng(state.home.lat, state.home.lon).toBounds(radiusM() * 2.1));
   panel.innerHTML = "";
   panel.append($("#tpl-home").content.cloneNode(true));
+  $("#area-name").textContent = state.home.postcode || "your point";
+  const rsel = $("#radius");
+  rsel.innerHTML = RADIUS_CHOICES.map((m) => `<option value="${m}">${fmtMi(m)}</option>`).join("");
+  rsel.value = state.radiusMi;
+  rsel.onchange = async () => {
+    state.radiusMi = +rsel.value;
+    store("radius", state.radiusMi);
+    drawRadius();
+    await ensureAround(state.home.lat, state.home.lon, radiusM() + 500);
+    map.fitBounds(L.latLng(state.home.lat, state.home.lon).toBounds(radiusM() * 2.1));
+    refreshList();
+  };
+  $("#to-report").onclick = showArea;
+  $("#change-area").onclick = clearHome;
   const chips = $("#phase-chips");
   for (const [k, p] of Object.entries(PHASES)) {
     const b = document.createElement("button");
@@ -435,13 +515,6 @@ function renderHome() {
   }
   sortSel.value = state.sort || (state.home ? "distance" : "name");
   sortSel.onchange = () => { state.sort = sortSel.value; refreshList(); };
-  if (state.home) {
-    const btn = document.createElement("button");
-    btn.className = "btn ghost small";
-    btn.textContent = `Back to area report${state.home.postcode ? ` for ${state.home.postcode}` : ""}`;
-    btn.onclick = showArea;
-    $(".intro").append(btn);
-  }
   refreshList();
   panel.append(footer());
 }
@@ -472,11 +545,11 @@ function refreshList() {
   const list = $("#school-list");
   if (!list) return;
   const sortBy = $("#sort")?.value || (state.home ? "distance" : "name");
-  const zoomedOut = map.getZoom() < MIN_ZOOM;
-  const view = map.getBounds();
-  let items = (zoomedOut ? [] : state.schools.filter((s) => inView(s, view) && visible(s))).map((s) => ({
-    s, d: state.home ? distM(state.home.lat, state.home.lon, s.lat, s.lon) : null, h: headline(s.urn),
-  }));
+  const h0 = state.home;
+  if (!h0) return;
+  let items = state.schools.filter((s) => s.lat != null && visible(s))
+    .map((s) => ({ s, d: distM(h0.lat, h0.lon, s.lat, s.lon), h: headline(s.urn) }))
+    .filter((x) => x.d <= radiusM());
   const desc = (k) => (a, b) => (b.h[k] ?? -1) - (a.h[k] ?? -1) || a.s.name.localeCompare(b.s.name);
   const sorters = {
     name: (a, b) => a.s.name.localeCompare(b.s.name),
@@ -490,7 +563,7 @@ function refreshList() {
   if (sortBy === "alevel") items = items.filter((x) => x.h.aps != null);
   items.sort(sorters[sortBy] || sorters.name);
   const label = { name: "A to Z", distance: "nearest first", sats: "best primary SATs first", gcse: "best GCSE results first", alevel: "best A-level results first" }[sortBy];
-  $("#list-count").textContent = zoomedOut ? "Schools" : `${items.length} schools in view · ${label}`;
+  $("#list-count").textContent = `${items.length} schools · ${label}`;
   list.innerHTML = items.slice(0, 300).map(({ s, d, h }) => `
     <li tabindex="0" data-urn="${s.urn}">
       <span class="dot" style="background:${(PHASES[s.phase] || PHASES.secondary).color}"></span>
@@ -503,10 +576,8 @@ function refreshList() {
   list.onkeydown = (e) => { if (e.key === "Enter") { const li = e.target.closest("li"); if (li) showSchool(+li.dataset.urn); } };
   if (!tiles.index) {
     list.innerHTML = '<li class="empty">School data has not been generated yet. Run the "Refresh data" workflow.</li>';
-  } else if (zoomedOut) {
-    list.innerHTML = `<li class="empty">Search for a postcode, town or school, or zoom in on the map, to list the schools there. ${tiles.index.schools.toLocaleString()} schools across England.</li>`;
   } else if (!items.length) {
-    list.innerHTML = '<li class="empty">No schools match these filters in this part of the map.</li>';
+    list.innerHTML = `<li class="empty">No schools match these filters within ${fmtMi(state.radiusMi)}. Try a wider distance or turn on more school types.</li>`;
   }
 }
 
@@ -690,7 +761,7 @@ async function showArea() {
   drawMarkers();
 
   panel.innerHTML = "";
-  panel.append(backButton("All schools", renderHome));
+  panel.append(backButton(`All schools within ${fmtMi(state.radiusMi)}`, renderHome));
   const head = document.createElement("div");
   head.innerHTML = `<h1>Around ${esc(h.postcode || "your point")}</h1>
     <p class="small muted">Schools you could get into, and what the area is like within ${AREA_RADIUS} m.</p>`;
@@ -1037,17 +1108,34 @@ async function findSchools(q) {
   hits.sort((a, b) => (b[1].toLowerCase().startsWith(ql) - a[1].toLowerCase().startsWith(ql)) || a[1].localeCompare(b[1]));
   return hits.slice(0, 12);
 }
+// Towns from the schools' own addresses: works offline and fills gaps in place search.
+async function findTowns(q) {
+  const idx = await getLazy("search");
+  if (!idx) return [];
+  const ql = q.toLowerCase();
+  const towns = new Map();
+  for (const r of idx.rows) {
+    const t = r[2];
+    if (!t || !t.toLowerCase().startsWith(ql)) continue;
+    const e = towns.get(t) || { name: t, lat: 0, lon: 0, n: 0 };
+    e.lat += r[4]; e.lon += r[5]; e.n++;
+    towns.set(t, e);
+  }
+  return [...towns.values()].sort((a, b) => (b.name.toLowerCase() === ql) - (a.name.toLowerCase() === ql) || b.n - a.n).slice(0, 6)
+    .map((e) => ({ name: e.name, where: `${e.n} schools`, lat: e.lat / e.n, lon: e.lon / e.n }));
+}
 async function findPlaces(q) {
-  if (OFFLINE) return [];
+  if (OFFLINE) return findTowns(q);
   try {
     const j = await (await fetch(`https://api.postcodes.io/places?q=${encodeURIComponent(q)}&limit=20`)).json();
     const seen = new Set();
-    return (j.result || [])
+    const out = (j.result || [])
       .filter((p) => p.country === "England" && /city|town|village|suburban|hamlet/i.test(p.local_type || ""))
       .filter((p) => { const k = `${p.name_1}|${p.county_unitary || p.district_borough}`; if (seen.has(k)) return false; seen.add(k); return true; })
       .slice(0, 6)
       .map((p) => ({ name: p.name_1, where: p.county_unitary || p.district_borough || p.region || "", lat: p.latitude, lon: p.longitude }));
-  } catch { return []; }
+    return out.length ? out : findTowns(q);
+  } catch { return findTowns(q); }
 }
 async function lookupOutcode(q) {
   if (OFFLINE) return lookupPostcode(q);
@@ -1069,7 +1157,7 @@ async function openSchool(urn, lat, lon) {
 function showSearchResults(q, places, schools) {
   state.selected = null;
   panel.innerHTML = "";
-  panel.append(backButton(state.home ? "Back to area report" : "All schools", state.home ? showArea : renderHome));
+  panel.append(backButton(state.home ? "Back to area report" : "Back", state.home ? showArea : renderHome));
   const div = document.createElement("div");
   div.innerHTML = `<h1>Results for “${esc(q)}”</h1>
     ${places.length ? `<div class="card"><h3>Places</h3><ul class="school-list">${places.map((p, i) => `<li tabindex="0" data-place="${i}"><div><div class="name">${esc(p.name)}</div><div class="meta">${esc(p.where)}</div></div></li>`).join("")}</ul></div>` : ""}
@@ -1080,7 +1168,7 @@ function showSearchResults(q, places, schools) {
     if (!li) return;
     if (li.dataset.place != null) {
       const p = places[+li.dataset.place];
-      map.setView([p.lat, p.lon], 13);
+      setHome(p.lat, p.lon, p.name);
       renderHome();
     } else {
       const r = schools.find((x) => x[0] === +li.dataset.urn);
@@ -1093,29 +1181,36 @@ function showSearchResults(q, places, schools) {
   panel.scrollTop = 0;
 }
 
-$("#search").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const q = $("#postcode").value.trim();
-  const msg = $("#search-msg");
+async function runSearch(q, msg) {
   msg.hidden = true;
   if (!q) return;
   if (PC_FULL.test(q) || PC_OUT.test(q)) {
     const hit = PC_FULL.test(q) ? await lookupPostcode(q) : await lookupOutcode(q);
     if (hit) {
       setHome(hit.lat, hit.lon, hit.postcode);
-      showArea();
+      renderHome();
       return;
     }
     if (PC_FULL.test(q)) {
       msg.textContent = OFFLINE
-        ? `${q.toUpperCase()} isn't in the preview's postcode list. Try a Sutton or Kingston postcode such as KT3 3NU, search a town or school, or tap the map.`
-        : `Couldn't find ${q.toUpperCase()}. Check the postcode, or tap the map instead.`;
+        ? `${q.toUpperCase()} isn't in the preview's postcode list. Try a Sutton or Kingston postcode such as KT3 3NU, or a town or school name.`
+        : `Couldn't find ${q.toUpperCase()}. Check the postcode, or try a town name.`;
       msg.hidden = false;
       return;
     }
   }
   const [places, schools] = await Promise.all([findPlaces(q), findSchools(q)]);
+  // One clear town match: go straight to it.
+  if (places.length === 1 && places[0].name.toLowerCase() === q.toLowerCase()) {
+    setHome(places[0].lat, places[0].lon, places[0].name);
+    renderHome();
+    return;
+  }
   showSearchResults(q, places, schools);
+}
+$("#search").addEventListener("submit", (e) => {
+  e.preventDefault();
+  runSearch($("#postcode").value.trim(), $("#search-msg"));
 });
 
 // ---------- boot ----------
@@ -1126,12 +1221,13 @@ $("#search").addEventListener("submit", async (e) => {
   state.catchmentSources = catchments?.sources || {};
   const params = new URLSearchParams(location.search);
   const saved = restore("home");
+  if (RADIUS_CHOICES.includes(restore("radius"))) state.radiusMi = restore("radius");
   if (params.get("school")) {
     renderHome();
     openSchool(+params.get("school"));
   } else if (saved?.lat) {
     setHome(saved.lat, saved.lon, saved.postcode);
-    showArea();
+    renderHome();
   } else {
     renderHome();
   }

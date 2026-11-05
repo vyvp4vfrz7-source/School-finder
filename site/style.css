@@ -186,3 +186,16 @@ table.t td.n, table.t th.n { text-align: right; white-space: nowrap; }
 .list-head .list-title { margin: 0; }
 .sort select { font: inherit; font-size: .82rem; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
 .school-list .meta.results { color: var(--accent); font-weight: 600; }
+
+.start { display: grid; gap: 12px; padding-top: 8px; }
+.start h1 { font-size: 1.45rem; text-wrap: balance; }
+.start p { margin: 0; color: var(--muted); }
+.start-form { display: flex; gap: 8px; }
+.start-form input {
+  flex: 1; min-width: 0; font: inherit; font-size: 1.05rem; padding: 10px 12px; border: 1px solid var(--border);
+  border-radius: 10px; background: var(--surface-2); color: var(--text);
+}
+.start-form input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.examples { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.area-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 8px; }
+.area-bar select { font: inherit; font-size: .88rem; padding: 4px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }

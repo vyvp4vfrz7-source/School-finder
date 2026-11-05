@@ -31,10 +31,35 @@
     <div id="map" class="map" role="application" aria-label="Map of schools"></div>
   </main>
 
+  <template id="tpl-start">
+    <section class="start">
+      <h1>Where are you looking?</h1>
+      <p>Enter a postcode or a town in England. We'll show the schools within 3 miles, with their exam results and Ofsted outcomes, plus crime and sold prices around the address.</p>
+      <form id="start-form" class="start-form" autocomplete="off">
+        <label for="start-q" class="visually-hidden">Postcode or town</label>
+        <input id="start-q" type="search" placeholder="e.g. KT3 3NU or Leeds" autocapitalize="words">
+        <button type="submit">Show schools</button>
+      </form>
+      <p id="start-msg" class="search-msg" role="status" hidden></p>
+      <div class="examples"><span class="muted small">Try</span>
+        <button type="button" class="chip" data-example="KT3 3NU">KT3 3NU</button>
+        <button type="button" class="chip" data-example="Altrincham">Altrincham</button>
+        <button type="button" class="chip" data-example="Harrogate">Harrogate</button>
+      </div>
+      <p class="small muted"><span id="start-count">24,812</span> schools across England. You can also tap the map, or search a school by name in the box at the top. Estimated catchments are available in Sutton and Kingston upon Thames.</p>
+    </section>
+  </template>
+
   <template id="tpl-home">
     <section class="intro">
-      <h1>Find the right school, then the right home</h1>
-      <p>Search a postcode, town or school anywhere in England, or tap the map, to see nearby schools with their exam results and Ofsted outcomes, plus crime and recent sold prices around the address. In Sutton and Kingston upon Thames you also get your chance of a secondary place from recent "last distance offered" figures.</p>
+      <h1>Schools near <span id="area-name"></span></h1>
+      <div class="area-bar">
+        <label for="radius" class="small muted">Within</label>
+        <select id="radius"></select>
+        <button type="button" class="btn small" id="to-report">Area report</button>
+        <button type="button" class="btn ghost small" id="change-area">Change area</button>
+      </div>
+      <p class="small muted">The area report has crime, sold prices and, in Sutton and Kingston, your chance of a secondary place.</p>
     </section>
     <section class="filters" aria-label="Filters">
       <div class="chips" id="phase-chips"></div>
