@@ -133,7 +133,7 @@ button, .btn {
 table.t { width: 100%; border-collapse: collapse; font-size: .86rem; font-variant-numeric: tabular-nums; }
 table.t th, table.t td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--border); vertical-align: top; }
 table.t th { font-weight: 600; color: var(--muted); font-size: .78rem; }
-table.t td.n, table.t th.n { text-align: right; }
+table.t td.n, table.t th.n { text-align: right; white-space: nowrap; }
 
 .verdict { display: inline-block; font-size: .78rem; font-weight: 700; padding: 2px 8px; border-radius: 99px; white-space: nowrap; }
 .v-good { background: var(--good-soft); color: var(--good); }

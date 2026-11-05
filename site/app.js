@@ -157,7 +157,10 @@ function chance(series, d) {
   const latest = usable.at(-1);
   const latestIn = latest.status === "all_offered" || d <= latest.distance;
   let cls = "v-bad", label = "Unlikely";
-  if (inside === usable.length) { cls = "v-good"; label = "Likely"; }
+  if (inside === usable.length) {
+    cls = "v-good";
+    label = usable.every((y) => y.status === "all_offered") ? "All applicants offered" : "Likely";
+  }
   else if (latestIn || inside * 2 >= usable.length) { cls = "v-warn"; label = "Borderline"; }
   return { cls, label, inside, total: usable.length };
 }
