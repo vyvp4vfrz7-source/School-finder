@@ -9,7 +9,8 @@ What it shows:
 - **Estimated catchments** for secondary schools, drawn from the councils' "last distance
   offered" figures for each of the last 3 to 5 years, with a Likely / Borderline / Unlikely
   verdict for any postcode.
-- **GCSE and A-level results trends** (Attainment 8, grade 5+ English and maths, A-level points per entry).
+- **GCSE and A-level results trends**: Attainment 8 and grade 5+ English and maths for 2024 to 2026,
+  and A-level average grade and AAB rate for 2022 to 2025 (the years DfE's current school-level data sets hold).
 - **Crime** within 500 m from police.uk, with a 3-year trend and the most common crime types.
 - **Sold prices** within 500 m from HM Land Registry, by property type and by year.
 - **Mobile signal** by operator from Ofcom (needs a free API key, see below).

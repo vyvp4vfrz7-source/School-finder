@@ -313,7 +313,7 @@ function resultsCard(s) {
     const yrs = Object.keys(k5).sort();
     const latest = k5[yrs.at(-1)];
     html += `<p class="small" style="margin-top:12px"><strong>A level</strong> (latest ${yrs.at(-1)})</p><div class="kpis">
-      <div class="kpi"><div class="v">${latest.aps ?? "–"}</div><div class="l">Points per entry</div></div>
+      <div class="kpi"><div class="v">${latest.grade ?? latest.aps ?? "–"}</div><div class="l">Average grade${latest.aps != null ? ` (${latest.aps} points)` : ""}</div></div>
       ${latest.aab != null ? `<div class="kpi"><div class="v">${latest.aab}%</div><div class="l">AAB+ (2 facilitating)</div></div>` : ""}
       ${latest.students != null ? `<div class="kpi"><div class="v">${latest.students}</div><div class="l">A-level students</div></div>` : ""}
     </div>
