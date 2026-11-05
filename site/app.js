@@ -608,6 +608,8 @@ function ofstedShort(urn) {
   if (!o) return "";
   const yr = o.date ? o.date.slice(0, 4) : "";
   if (o.g.overall) return `Ofsted ${o.g.overall}${yr ? ` (${yr})` : ""}`;
+  const remains = o.ungraded?.outcome?.match(/remains (\w[\w ]*)/i);
+  if (remains) return `Ofsted ${remains[1]}${o.ungraded.date ? ` (${o.ungraded.date.slice(0, 4)})` : ""}`;
   return o.scheme === "report-card" ? `Ofsted report card${yr ? ` ${yr}` : ""}` : `Ofsted inspected${yr ? ` ${yr}` : ""}`;
 }
 function ofstedCard(s) {
@@ -619,13 +621,15 @@ function ofstedCard(s) {
   }
   const labels = tiles.index?.ofstedLabels || {};
   const table = (g) => `<table class="t"><tbody>${Object.entries(g).map(([k, v]) => `<tr><td>${esc(labels[k] || k)}</td><td><span class="verdict ${gradeClass(v)}">${esc(v)}</span></td></tr>`).join("")}</tbody></table>`;
-  const rows = table(o.g);
+  const rows = Object.keys(o.g).length ? table(o.g) : "";
   const extra = [
     o.concern ? `<p class="small"><span class="verdict v-bad">${esc(o.concern)}</span></p>` : "",
-    o.ungraded ? `<p class="small">Later ungraded inspection on ${esc(o.ungraded.date)}${o.ungraded.outcome ? `: ${esc(o.ungraded.outcome)}` : ""}.</p>` : "",
+    o.ungraded ? `<p class="small">${o.scheme === "ungraded" ? "Ungraded" : "Later ungraded"} inspection on ${esc(o.ungraded.date)}${o.ungraded.outcome ? `: <strong>${esc(o.ungraded.outcome)}</strong>` : ""}.</p>` : "",
     o.previous ? `<p class="small muted" style="margin-top:10px">Previous graded inspection${o.previous.date ? `, ${esc(o.previous.date)}` : ""}</p>${table(o.previous.g)}` : "",
   ].join("");
-  const scheme = o.scheme === "report-card"
+  const scheme = o.scheme === "ungraded"
+    ? "Ungraded (short) inspection, which checks whether a school is still at its previous grade."
+    : o.scheme === "report-card"
     ? "Report card (the 5-point scale used since November 2025)."
     : o.g.overall ? "Graded inspection with an overall grade (used until August 2024)."
     : "Graded inspection without an overall grade (September 2024 to November 2025).";

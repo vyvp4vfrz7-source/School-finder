@@ -199,12 +199,13 @@ def run():
                     rec["previous"] = {"date": col("oeif"), "g": graded}
             elif graded:
                 rec = {"scheme": "graded", "date": col("oeif"), "published": col("oeifPub"), "g": graded}
+            elif col("ungraded"):
+                # Only an ungraded (short) inspection is on file, e.g. "School remains Good".
+                rec = {"scheme": "ungraded", "date": col("ungraded"), "g": {}}
             else:
                 skipped += 1
-                if skipped <= 3:
-                    print(f"    no grades for URN {urn}: { {k: v for k, v in row.items() if v and v.strip()} }")
                 continue
-            if col("ungraded") and (rec["date"] or "") < col("ungraded"):
+            if col("ungraded") and (rec["date"] or "") <= col("ungraded"):
                 outcome = (row.get(dcols["ungradedOutcome"]) or "").strip() if dcols.get("ungradedOutcome") else ""
                 rec["ungraded"] = {"date": col("ungraded"), "outcome": outcome or None}
             concern = (row.get(dcols["concern"]) or "").strip() if dcols.get("concern") else ""
@@ -215,7 +216,7 @@ def run():
             if not old or (rec.get("date") or "") > (old.get("date") or ""):
                 out[urn] = rec
             n += 1
-        print(f"    {n} schools read, {skipped} without any grade")
+        print(f"    {n} schools read, {skipped} with no inspection on file")
         if n and len(out) > 15000:
             break
     if not out:
