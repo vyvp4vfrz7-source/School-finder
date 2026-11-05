@@ -166,7 +166,7 @@ function chance(series, d) {
 function lineChart(points, { fmt = (v) => v, height = 90 } = {}) {
   const pts = points.filter((p) => p.v != null);
   if (!pts.length) return '<div class="empty">No published figures.</div>';
-  const W = 320, H = height, pad = { l: 8, r: 8, t: 16, b: 18 };
+  const W = 320, H = height, pad = { l: 28, r: 28, t: 16, b: 18 };
   const vs = pts.map((p) => p.v);
   let lo = Math.min(...vs), hi = Math.max(...vs);
   if (lo === hi) { lo -= 1; hi += 1; }
@@ -366,7 +366,7 @@ async function showArea() {
   state.selected = null;
   ringLayer.clearLayers();
   drawMarkers();
-  map.setView([h.lat, h.lon], Math.max(map.getZoom(), 14));
+  map.fitBounds(L.latLng(h.lat, h.lon).toBounds(AREA_RADIUS * 6));
 
   panel.innerHTML = "";
   panel.append(backButton("All schools", renderHome));
