@@ -28,24 +28,31 @@ PAGES = [
 SEARCH = (f"{GOVUK}/api/search.json?q=ofsted+school+inspections+management+information"
           "&filter_organisations=ofsted&count=20&fields=link,title,public_timestamp")
 
-# Report card evaluation areas (from November 2025), then the earlier framework.
+# Report card evaluation areas (from November 2025). The file carries these next to the
+# latest graded (OEIF) inspection's columns, which are prefixed "Latest OEIF".
 # Each entry: key, label, keywords that must all appear in the header, words that must not.
-AREAS = [
+RC_AREAS = [
     ("inclusion", "Inclusion", ["inclusion"], []),
     ("curriculum", "Curriculum and teaching", ["curriculum", "teaching"], []),
     ("achievement", "Achievement", ["achievement"], []),
     ("attendance", "Attendance and behaviour", ["attendance", "behaviour"], []),
     ("wellbeing", "Personal development and well-being", ["personal development", "well"], []),
     ("leadershipGov", "Leadership and governance", ["leadership", "governance"], []),
-    ("safeguarding", "Safeguarding", ["safeguarding"], []),
+    ("rcEarlyYears", "Early years", ["early years"], []),
+    ("post16", "Post-16 provision", ["post-16"], []),
+    ("safeguarding", "Safeguarding", ["safeguarding standards"], []),
+]
+OEIF_AREAS = [
     ("overall", "Overall effectiveness", ["overall effectiveness"], []),
     ("quality", "Quality of education", ["quality of education"], []),
     ("behaviour", "Behaviour and attitudes", ["behaviour and attitudes"], []),
     ("personal", "Personal development", ["personal development"], ["well"]),
     ("leadership", "Leadership and management", ["leadership and management"], []),
-    ("earlyYears", "Early years", ["early years"], []),
-    ("sixthForm", "Sixth form", ["sixth form"], []),
+    ("earlyYears", "Early years", ["early years provision"], []),
+    ("sixthForm", "Sixth form", ["sixth form provision"], []),
+    ("oeifSafeguarding", "Safeguarding effective", ["safeguarding"], []),
 ]
+AREAS = RC_AREAS + OEIF_AREAS
 OLD_GRADES = {"1": "Outstanding", "2": "Good", "3": "Requires improvement", "4": "Inadequate"}
 EMPTY = {"", "null", "na", "n/a", "not judged", "not applicable", "9", "-", "none"}
 
@@ -105,24 +112,40 @@ def _date(v):
     return None
 
 
-def map_columns(headers):
+def _match(low, areas, want_oeif, oeif_in_file):
     cols = {}
-    low = {h: h.lower().replace("‑", "-").strip() for h in headers}
-    for key, _label, need, avoid in AREAS:
+    for key, _label, need, avoid in areas:
         for h, l in low.items():
-            if "previous" in l or "ungraded" in l or h in cols.values():
+            if "previous" in l or "ungraded" in l or "date" in l or h in cols.values():
+                continue
+            if oeif_in_file and (("oeif" in l) != want_oeif):
                 continue
             if all(n in l for n in need) and not any(a in l for a in avoid):
                 cols[key] = h
                 break
+    return cols
+
+
+def map_columns(headers):
+    low = {h: " ".join(h.lower().replace("\u2011", "-").split()) for h in headers}
+    oeif_in_file = any("oeif" in l for l in low.values())
+    rc = _match(low, RC_AREAS, False, oeif_in_file)
+    oeif = _match(low, OEIF_AREAS, True, oeif_in_file)
     urn = next((h for h, l in low.items() if l == "urn"), None)
-    date_cands = [h for h, l in low.items() if "date" in l and ("inspection" in l or "publication" in l)
-                  and "previous" not in l]
-    start = [h for h in date_cands if "start" in low[h] and "ungraded" not in low[h]]
-    date = (start or [h for h in date_cands if "ungraded" not in low[h]] or date_cands or [None])[0]
-    published = next((h for h in date_cands if "publication" in low[h]), None)
-    kind = next((h for h, l in low.items() if "inspection type" in l or "type of inspection" in l), None)
-    return urn, date, published, kind, cols
+
+    def find(*need, avoid=()):
+        return next((h for h, l in low.items() if all(n in l for n in need) and not any(a in l for a in avoid)), None)
+
+    dates = {
+        "rc": find("inspection start date", avoid=("oeif", "ungraded", "previous")),
+        "rcPub": find("publication date", avoid=("oeif", "ungraded", "previous")),
+        "oeif": find("inspection start date", "oeif") if oeif_in_file else find("inspection start date"),
+        "oeifPub": find("publication date", "oeif") if oeif_in_file else None,
+        "ungraded": find("date of latest ungraded inspection"),
+        "ungradedOutcome": find("ungraded inspection overall outcome"),
+        "concern": find("category of concern", avoid=("oeif", "previous", "most recent")),
+    }
+    return urn, dates, rc, oeif
 
 
 def clean_grade(v, key):
@@ -152,10 +175,12 @@ def run():
             print(f"    {f['url']} returned HTML, skipped")
             continue
         reader = csv.DictReader(io.StringIO(text))
-        urn_col, date_col, pub_col, kind_col, cols = map_columns(reader.fieldnames or [])
+        urn_col, dcols, rc_cols, oeif_cols = map_columns(reader.fieldnames or [])
         print(f"    {f['title']}: {len(reader.fieldnames or [])} columns")
         print(f"    headers: {reader.fieldnames}")
-        print(f"    matched: urn={urn_col!r} date={date_col!r} published={pub_col!r} areas={cols}")
+        print(f"    matched: urn={urn_col!r} dates={dcols}")
+        print(f"    report card areas={rc_cols}")
+        print(f"    graded areas={oeif_cols}")
         if not urn_col:
             continue
         used.append(f["title"])
@@ -165,19 +190,26 @@ def run():
                 urn = str(int(row[urn_col]))
             except (TypeError, ValueError):
                 continue
-            grades = {k: g for k, c in cols.items() if (g := clean_grade(row.get(c), k))}
-            date = _date(row.get(date_col)) if date_col else None
-            if not grades and not date:
+            col = lambda k: _date(row.get(dcols[k])) if dcols.get(k) else None  # noqa: E731
+            rc = {k: g for k, c in rc_cols.items() if (g := clean_grade(row.get(c), k))}
+            graded = {k: g for k, c in oeif_cols.items() if (g := clean_grade(row.get(c), k))}
+            if rc:
+                rec = {"scheme": "report-card", "date": col("rc"), "published": col("rcPub"), "g": rc}
+                if graded:
+                    rec["previous"] = {"date": col("oeif"), "g": graded}
+            elif graded:
+                rec = {"scheme": "graded", "date": col("oeif"), "published": col("oeifPub"), "g": graded}
+            else:
                 continue
-            rec = {"date": date, "g": grades}
-            if pub_col and _date(row.get(pub_col)):
-                rec["published"] = _date(row.get(pub_col))
-            if kind_col and row.get(kind_col):
-                rec["type"] = row[kind_col].strip()
-            rc = any(k in grades for k in ("inclusion", "curriculum", "achievement", "attendance", "wellbeing"))
-            rec["scheme"] = "report-card" if rc else "graded"
+            if col("ungraded") and (rec["date"] or "") < col("ungraded"):
+                outcome = (row.get(dcols["ungradedOutcome"]) or "").strip() if dcols.get("ungradedOutcome") else ""
+                rec["ungraded"] = {"date": col("ungraded"), "outcome": outcome or None}
+            concern = (row.get(dcols["concern"]) or "").strip() if dcols.get("concern") else ""
+            if concern and concern.lower() not in EMPTY:
+                rec["concern"] = concern
+            rec = {k: v for k, v in rec.items() if v is not None}
             old = out.get(urn)
-            if not old or (rec["date"] or "") > (old["date"] or ""):
+            if not old or (rec.get("date") or "") > (old.get("date") or ""):
                 out[urn] = rec
             n += 1
         print(f"    {n} schools read")

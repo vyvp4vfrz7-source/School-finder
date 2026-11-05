@@ -600,7 +600,7 @@ function resultsCard(s) {
 const GRADE_CLASS = {
   Outstanding: "v-good", Good: "v-good", Exceptional: "v-good", "Strong standard": "v-good", Met: "v-good",
   "Expected standard": "v-na", "Requires improvement": "v-warn", "Needs attention": "v-warn",
-  Inadequate: "v-bad", "Urgent improvement": "v-bad", "Not met": "v-bad",
+  Inadequate: "v-bad", "Urgent improvement": "v-bad", "Not met": "v-bad", Yes: "v-good", No: "v-bad",
 };
 const gradeClass = (g) => GRADE_CLASS[g] || Object.entries(GRADE_CLASS).find(([k]) => g?.toLowerCase().startsWith(k.toLowerCase()))?.[1] || "v-na";
 function ofstedShort(urn) {
@@ -618,13 +618,19 @@ function ofstedCard(s) {
     return `<div class="card"><h3>Ofsted</h3><div class="empty">No inspection outcome in Ofsted's latest file (new schools often have not been inspected yet).</div><p class="note">${link}</p></div>`;
   }
   const labels = tiles.index?.ofstedLabels || {};
-  const rows = Object.entries(o.g).map(([k, g]) => `<tr><td>${esc(labels[k] || k)}</td><td><span class="verdict ${gradeClass(g)}">${esc(g)}</span></td></tr>`).join("");
+  const table = (g) => `<table class="t"><tbody>${Object.entries(g).map(([k, v]) => `<tr><td>${esc(labels[k] || k)}</td><td><span class="verdict ${gradeClass(v)}">${esc(v)}</span></td></tr>`).join("")}</tbody></table>`;
+  const rows = table(o.g);
+  const extra = [
+    o.concern ? `<p class="small"><span class="verdict v-bad">${esc(o.concern)}</span></p>` : "",
+    o.ungraded ? `<p class="small">Later ungraded inspection on ${esc(o.ungraded.date)}${o.ungraded.outcome ? `: ${esc(o.ungraded.outcome)}` : ""}.</p>` : "",
+    o.previous ? `<p class="small muted" style="margin-top:10px">Previous graded inspection${o.previous.date ? `, ${esc(o.previous.date)}` : ""}</p>${table(o.previous.g)}` : "",
+  ].join("");
   const scheme = o.scheme === "report-card"
     ? "Report card (the 5-point scale used since November 2025)."
     : o.g.overall ? "Graded inspection with an overall grade (used until August 2024)."
     : "Graded inspection without an overall grade (September 2024 to November 2025).";
   return `<div class="card"><h3>Ofsted${o.date ? ` <span class="small muted">inspected ${esc(o.date)}</span>` : ""}</h3>
-    <table class="t"><tbody>${rows}</tbody></table>
+    ${rows}${extra}
     <p class="note">${scheme} ${link}.</p></div>`;
 }
 

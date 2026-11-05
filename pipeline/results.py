@@ -11,7 +11,6 @@ Each data set below is a rolling "latest data" set that covers several years.
 
 import csv
 import io
-import shutil
 import zipfile
 
 from .common import RAW, session, write_json
@@ -71,8 +70,10 @@ def download_csv(ds_id):
             with session.get(f"{CATALOGUE}/{ds_id}/csv", stream=True, timeout=900) as r:
                 if r.status_code != 200:
                     raise RuntimeError(f"download failed for {ds_id}: HTTP {r.status_code}")
+                # iter_content undoes any gzip transfer encoding; r.raw would not.
                 with open(path, "wb") as f:
-                    shutil.copyfileobj(r.raw, f, length=1 << 20)
+                    for chunk in r.iter_content(1 << 20):
+                        f.write(chunk)
             break
         except Exception as e:  # noqa: BLE001 - retry any network failure
             if attempt == 2:
@@ -105,8 +106,10 @@ def to_num(v):
 
 def parse(stream, cfg):
     reader = csv.DictReader(stream)
-    cols = {c.lower(): c for c in reader.fieldnames}
+    cols = {c.lower(): c for c in reader.fieldnames or []}
     urn_col = cols.get("school_urn") or cols.get("urn")
+    if not urn_col:
+        raise RuntimeError(f"no URN column; first columns: {(reader.fieldnames or [])[:15]}")
     if "by_subject" in cfg:
         return parse_by_subject(reader, cols, urn_col, cfg)
     mcols = {k: next((cols[c] for c in cands if c in cols), None) for k, cands in cfg["measures"].items()}
