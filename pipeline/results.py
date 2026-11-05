@@ -11,9 +11,10 @@ Each data set below is a rolling "latest data" set that covers several years.
 
 import csv
 import io
+import shutil
 import zipfile
 
-from .common import SITE_DATA, get, read_json, write_json
+from .common import RAW, session, write_json
 
 CATALOGUE = "https://explore-education-statistics.service.gov.uk/data-catalogue/data-set"
 
@@ -62,15 +63,30 @@ DATASETS = {
 
 
 def download_csv(ds_id):
-    r = get(f"{CATALOGUE}/{ds_id}/csv", timeout=900)
-    if r.status_code != 200 or not r.content:
-        raise RuntimeError(f"download failed for {ds_id}: HTTP {r.status_code}")
-    content = r.content
-    if content[:2] == b"PK":
-        with zipfile.ZipFile(io.BytesIO(content)) as z:
-            csvs = [n for n in z.namelist() if n.lower().endswith(".csv") and "meta" not in n.lower()]
-            content = z.read(max(csvs, key=lambda n: z.getinfo(n).file_size))
-    return content.decode("utf-8-sig", errors="replace")
+    """Stream the national file to disk (they run to hundreds of MB) and return a text stream."""
+    RAW.mkdir(parents=True, exist_ok=True)
+    path = RAW / f"ees-{ds_id}.download"
+    for attempt in range(3):
+        try:
+            with session.get(f"{CATALOGUE}/{ds_id}/csv", stream=True, timeout=900) as r:
+                if r.status_code != 200:
+                    raise RuntimeError(f"download failed for {ds_id}: HTTP {r.status_code}")
+                with open(path, "wb") as f:
+                    shutil.copyfileobj(r.raw, f, length=1 << 20)
+            break
+        except Exception as e:  # noqa: BLE001 - retry any network failure
+            if attempt == 2:
+                raise
+            print(f"    retrying download ({e})")
+    print(f"    downloaded {path.stat().st_size // 1_000_000} MB")
+    with open(path, "rb") as f:
+        is_zip = f.read(2) == b"PK"
+    if is_zip:
+        z = zipfile.ZipFile(path)
+        csvs = [n for n in z.namelist() if n.lower().endswith(".csv") and "meta" not in n.lower()]
+        raw = z.open(max(csvs, key=lambda n: z.getinfo(n).file_size))
+        return io.TextIOWrapper(raw, encoding="utf-8-sig", errors="replace", newline="")
+    return open(path, encoding="utf-8-sig", errors="replace", newline="")
 
 
 SUPPRESSED = {"", "x", "z", "c", "u", "low", "supp", "ne", "np", "na"}
@@ -87,12 +103,12 @@ def to_num(v):
         return v
 
 
-def parse(text, cfg, urns):
-    reader = csv.DictReader(io.StringIO(text))
+def parse(stream, cfg):
+    reader = csv.DictReader(stream)
     cols = {c.lower(): c for c in reader.fieldnames}
     urn_col = cols.get("school_urn") or cols.get("urn")
     if "by_subject" in cfg:
-        return parse_by_subject(reader, cols, urn_col, cfg, urns)
+        return parse_by_subject(reader, cols, urn_col, cfg)
     mcols = {k: next((cols[c] for c in cands if c in cols), None) for k, cands in cfg["measures"].items()}
     fcols = {cols[c]: v for c, v in cfg["filters"].items() if c in cols}
     print(f"    measures: {mcols}")
@@ -102,8 +118,6 @@ def parse(text, cfg, urns):
         try:
             urn = int(row[urn_col])
         except (TypeError, ValueError):
-            continue
-        if urn not in urns:
             continue
         for c in fcols:
             seen_vals.setdefault(c, set()).add(row.get(c))
@@ -121,7 +135,7 @@ def parse(text, cfg, urns):
     return out
 
 
-def parse_by_subject(reader, cols, urn_col, cfg, urns):
+def parse_by_subject(reader, cols, urn_col, cfg):
     fcols = {cols[c]: v for c, v in cfg["filters"].items() if c in cols}
     subj_col = cols.get("subject")
     print(f"    filters: {fcols}, subject column: {subj_col}")
@@ -130,8 +144,6 @@ def parse_by_subject(reader, cols, urn_col, cfg, urns):
         try:
             urn = int(row[urn_col])
         except (TypeError, ValueError):
-            continue
-        if urn not in urns:
             continue
         subj = (row.get(subj_col) or "").strip().lower()
         subjects.add(subj)
@@ -154,18 +166,19 @@ def parse_by_subject(reader, cols, urn_col, cfg, urns):
 
 
 def run():
-    schools = read_json(SITE_DATA / "schools.json")
-    urns = {s["urn"] for s in schools["schools"]}
+    """All schools in England. The tiles step joins these to schools by URN."""
     out = {"years": {}}
     for key, cfg in DATASETS.items():
         print(f"  {key}: data set {cfg['id']}")
-        data = parse(download_csv(cfg["id"]), cfg, urns)
+        with download_csv(cfg["id"]) as stream:
+            data = parse(stream, cfg)
         out[key] = data
         out["years"][key] = sorted({int(y) for d in data.values() for y in d})
-        print(f"    {len(data)} pilot schools, years {out['years'][key]}")
+        print(f"    {len(data)} schools, years {out['years'][key]}")
+        (RAW / f"ees-{cfg['id']}.download").unlink(missing_ok=True)
     out["source"] = "DfE Explore Education Statistics"
     out["sourceUrl"] = "https://explore-education-statistics.service.gov.uk/"
-    write_json(SITE_DATA / "results.json", out)
+    write_json(RAW / "results_england.json", out)
 
 
 if __name__ == "__main__":

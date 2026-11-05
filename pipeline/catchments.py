@@ -12,7 +12,7 @@ import difflib
 import re
 import sys
 
-from .common import MANUAL, SITE_DATA, read_json, write_json
+from .common import MANUAL, PILOT_SCHOOLS, SITE_DATA, read_json, write_json
 
 
 def norm(name):
@@ -37,7 +37,7 @@ def match(name, la, schools, phases=None):
 
 
 def run():
-    schools = read_json(SITE_DATA / "schools.json")["schools"]
+    schools = read_json(PILOT_SCHOOLS)["schools"]
     with open(MANUAL / "catchment_sources.csv", encoding="utf-8") as f:
         sources = {r["id"]: r for r in csv.DictReader(f)}
     with open(MANUAL / "catchments.csv", encoding="utf-8") as f:

@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       steps:
-        description: "Steps to run (space separated: schools catchments results crime prices coverage). Blank runs all."
+        description: "Steps to run, space separated (schools results ofsted tiles catchments probe crime_baseline crime prices coverage basemap). Blank runs all."
         required: false
         default: ""
   schedule:

@@ -1,6 +1,7 @@
 """Run every pipeline step. Usage: python -m pipeline.run_all [step ...]
 
-Steps: schools, catchments, results, crime, prices, coverage, basemap.
+Steps: schools, results, ofsted, tiles, catchments, probe, crime_baseline,
+then the pilot-only steps crime, prices, coverage and basemap.
 A failing step is reported and the others still run, so one slow or broken
 source never blocks the rest of the site's data.
 """
@@ -11,12 +12,19 @@ import time
 import traceback
 
 from .common import SITE_DATA
-from . import basemap, catchments, coverage, crime, prices, results, schools
+from . import (basemap, catchments, coverage, crime, crime_baseline, ofsted, prices, probe,
+               results, schools, tiles)
 
 STEPS = {
+    # England-wide
     "schools": schools.run,
-    "catchments": catchments.run,
     "results": results.run,
+    "ofsted": ofsted.run,
+    "tiles": tiles.run,
+    "catchments": catchments.run,
+    "probe": probe.run,
+    "crime_baseline": crime_baseline.run,
+    # Catchment pilot only: offline fallbacks for the preview and the base map
     "crime": crime.run,
     "prices": prices.run,
     "coverage": coverage.run,
@@ -24,7 +32,8 @@ STEPS = {
 }
 
 # Steps that take a long time; a push-triggered run reuses their last output.
-SLOW = {"crime": "crime.json", "prices": "sales.json", "basemap": "basemap.json"}
+SLOW = {"crime": "crime.json", "prices": "sales.json", "basemap": "basemap.json",
+        "crime_baseline": "crime_baseline.json"}
 
 
 def main(argv):
