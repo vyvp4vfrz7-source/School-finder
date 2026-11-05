@@ -1,0 +1,72 @@
+la,school,year,distance_m,status,measured_from,source,notes
+Kingston upon Thames,Chessington School,2021,,all_offered,,K1,All preferences met
+Kingston upon Thames,Chessington School,2022,5467,distance,,K1,
+Kingston upon Thames,Chessington School,2023,,unclear,,K1,"Printed as ""No further offers made"""
+Kingston upon Thames,Chessington School,2024,,all_offered,,K2,All preferences met
+Kingston upon Thames,Chessington School,2025,,unclear,,K2,"Printed as ""Overseas"" (last offer went to an applicant living abroad)"
+Kingston upon Thames,Coombe Boys' School,2021,2437,distance,,K1,
+Kingston upon Thames,Coombe Boys' School,2022,2661,distance,,K1,
+Kingston upon Thames,Coombe Boys' School,2023,3774,distance,,K1,
+Kingston upon Thames,Coombe Boys' School,2024,2836,distance,,K2,
+Kingston upon Thames,Coombe Boys' School,2025,4333,distance,,K2,
+Kingston upon Thames,Coombe Girls' School,2021,2377,distance,,K1,
+Kingston upon Thames,Coombe Girls' School,2022,2079,distance,,K1,
+Kingston upon Thames,Coombe Girls' School,2023,2138,distance,,K1,
+Kingston upon Thames,Coombe Girls' School,2024,3236,distance,,K2,
+Kingston upon Thames,Coombe Girls' School,2025,,unclear,,K2,"Printed as ""Overseas"" (last offer went to an applicant living abroad)"
+Kingston upon Thames,The Hollyfield School,2021,1565,distance,,K1,
+Kingston upon Thames,The Hollyfield School,2022,1961,distance,,K1,
+Kingston upon Thames,The Hollyfield School,2023,1864,distance,,K1,
+Kingston upon Thames,The Hollyfield School,2024,2583,distance,,K2,
+Kingston upon Thames,The Hollyfield School,2025,2206,distance,,K2,
+Kingston upon Thames,The Kingston Academy,2021,1533,distance,,K1,
+Kingston upon Thames,The Kingston Academy,2022,685,distance,,K1,
+Kingston upon Thames,The Kingston Academy,2023,1075,distance,,K1,
+Kingston upon Thames,The Kingston Academy,2024,1204,distance,,K2,
+Kingston upon Thames,The Kingston Academy,2025,1304,distance,,K2,
+Kingston upon Thames,Southborough High School,2021,4659,distance,,K1,
+Kingston upon Thames,Southborough High School,2022,,all_offered,,K1,All preferences met
+Kingston upon Thames,Southborough High School,2023,6016,distance,,K1,
+Kingston upon Thames,Southborough High School,2024,,all_offered,,K2,All preferences met
+Kingston upon Thames,Southborough High School,2025,,unclear,,K2,"Printed as ""Overseas"" (last offer went to an applicant living abroad)"
+Kingston upon Thames,Tolworth Girls' School,2021,3523,distance,,K1,
+Kingston upon Thames,Tolworth Girls' School,2022,2708,distance,,K1,
+Kingston upon Thames,Tolworth Girls' School,2023,4012,distance,,K1,
+Kingston upon Thames,Tolworth Girls' School,2024,8744,distance,,K2,
+Kingston upon Thames,Tolworth Girls' School,2025,3870,distance,,K2,
+Kingston upon Thames,The Holy Cross School,2025,,faith,,K2,Faith school: places by faith criteria. Contact the school.
+Kingston upon Thames,Richard Challoner School,2025,,faith,,K2,Faith school: places by faith criteria. Contact the school.
+Kingston upon Thames,The Tiffin Girls' School,2025,,selective,,K2,Grammar school: places by test score.
+Kingston upon Thames,Tiffin School,2025,,selective,,K2,Grammar school: places by test score.
+Sutton,Carshalton Boys Sports College,2024,4185,distance,,S1,
+Sutton,Carshalton Boys Sports College,2025,3756,distance,,S2,"Printed as ""3.756"" in a metres column; read as 3,756 m"
+Sutton,Carshalton Boys Sports College,2026,4762,distance,,S3,Year inferred from the council's current offer-day page
+Sutton,Carshalton High School for Girls,2024,3780,distance,,S1,
+Sutton,Carshalton High School for Girls,2025,3656,distance,,S2,
+Sutton,Carshalton High School for Girls,2026,3394,distance,,S3,Year inferred from the council's current offer-day page
+Sutton,Cheam High School,2024,1492,distance,,S1,General places
+Sutton,Cheam High School,2025,1457,distance,,S2,General places
+Sutton,Cheam High School,2026,1325,distance,,S3,General places. Year inferred from the council's current offer-day page
+Sutton,Cheam High School,2024,678,distance,Dorchester Primary School,S1,Up to 30 Worcester Park places measured from Dorchester Primary School
+Sutton,Cheam High School,2025,789,distance,Dorchester Primary School,S2,Up to 30 Worcester Park places measured from Dorchester Primary School
+Sutton,Cheam High School,2026,607,distance,Dorchester Primary School,S3,Up to 30 Worcester Park places measured from Dorchester Primary School. Year inferred
+Sutton,Greenshaw High School,2024,1176,distance,,S1,60 places by ability test are not distance based
+Sutton,Greenshaw High School,2025,1242,distance,,S2,60 places by ability test are not distance based
+Sutton,Greenshaw High School,2026,1108,distance,,S3,Year inferred from the council's current offer-day page
+Sutton,Harris Academy Sutton,2024,1171,distance,,S1,
+Sutton,Harris Academy Sutton,2025,970,distance,,S2,
+Sutton,Harris Academy Sutton,2026,1055,distance,,S3,Year inferred from the council's current offer-day page
+Sutton,Oaks Park High School,2024,4070,distance,,S1,
+Sutton,Oaks Park High School,2025,4007,distance,,S2,
+Sutton,Oaks Park High School,2026,4019,distance,,S3,Year inferred from the council's current offer-day page
+Sutton,Overton Grange School,2024,,all_offered,,S1,All applicants offered
+Sutton,Overton Grange School,2025,,all_offered,,S2,All applicants offered
+Sutton,Overton Grange School,2026,,all_offered,,S3,All applicants offered
+Sutton,Glenthorne High School,2026,,banding,,S3,Places by ability banding then distance; no single cut-off published
+Sutton,St Philomena's Catholic High School for Girls,2026,,faith,,S3,Faith school: places by faith criteria
+Sutton,The John Fisher School,2026,,faith,,S3,Faith school: places by faith criteria
+Sutton,Nonsuch High School for Girls,2026,,selective,,S3,Grammar school: places by test score (distance places capped at 5.25 km)
+Sutton,Sutton Grammar School,2026,,selective,,S3,Grammar school: places by test score
+Sutton,Wallington County Grammar School,2026,,selective,,S3,Grammar school: places by test score
+Sutton,Wallington High School for Girls,2026,,selective,,S3,Grammar school: places by test score
+Sutton,Wilson's School,2026,,selective,,S3,Grammar school: places by test score
