@@ -155,7 +155,7 @@ function drawVectorBase(base) {
       fill("green", st.green);
       fill("water", st.water);
       stroke("river", st.water, Math.max(2, (z - 10) * 1.6));
-      const k = Math.max(0.4, (z - 11) * 0.9);
+      const k = Math.min(2.6, Math.max(0.4, (z - 11) * 0.8));
       if (z >= 13) { stroke("minor", st.minorEdge, 1.6 * k + 1); stroke("minor", st.minor, 1.6 * k); }
       stroke("mid", st.midEdge, 2.2 * k + 1.2); stroke("mid", st.mid, 2.2 * k);
       stroke("major", st.majorEdge, 3 * k + 1.5); stroke("major", st.major, 3 * k);
@@ -409,6 +409,11 @@ function headline(urn) {
       g?.em5 != null ? `GCSE ${Math.round(g.em5)}% grade 5+` : null,
       a?.grade ? `A level ${a.grade}` : null,
     ].filter(Boolean).join(" · "),
+    short: [
+      p?.rwm != null ? `SATs ${Math.round(p.rwm)}%` : null,
+      g?.em5 != null ? `GCSE ${Math.round(g.em5)}%` : null,
+      a?.grade ? `A level ${a.grade}` : null,
+    ].filter(Boolean).join(" · "),
   };
 }
 
@@ -609,10 +614,10 @@ async function showArea() {
   sec.innerHTML = `<h3>Secondary schools: your chances</h3>
     ${rows.length ? `<table class="t"><thead><tr><th>School</th><th class="n">Distance</th><th>Chance</th></tr></thead><tbody>
     ${rows.slice(0, 14).map((r) => `<tr data-urn="${r.s.urn}" style="cursor:pointer">
-      <td><a href="#" data-urn="${r.s.urn}">${esc(r.s.name)}</a>${headline(r.s.urn).text ? `<div class="small muted">${esc(headline(r.s.urn).text)}</div>` : ""}${r.extra ? `<div class="small muted">${esc(r.extra.label)}: ${r.extra.ch.label}</div>` : ""}</td>
+      <td><a href="#" data-urn="${r.s.urn}">${esc(r.s.name)}</a>${headline(r.s.urn).short ? `<div class="small muted">${esc(headline(r.s.urn).short)}</div>` : ""}${r.extra ? `<div class="small muted">${esc(r.extra.label)}: ${r.extra.ch.label}</div>` : ""}</td>
       <td class="n">${fmtKm(r.d)}</td><td><span class="verdict ${r.ch.cls}">${r.ch.label}</span></td></tr>`).join("")}
     </tbody></table>` : '<div class="empty">Catchment data has not been generated yet.</div>'}
-    <p class="note">Based on councils' "last distance offered" over the last 3 to 5 years. Grammar and faith schools allocate by test or faith, so check their admissions rules.</p>`;
+    <p class="note">GCSE is the share of pupils with grade 5 or above in English and maths. Chances are based on councils' "last distance offered" over the last 3 to 5 years. Grammar and faith schools allocate by test or faith, so check their admissions rules.</p>`;
   sec.onclick = (e) => { const t = e.target.closest("[data-urn]"); if (t) { e.preventDefault(); showSchool(+t.dataset.urn); } };
   panel.append(sec);
 
