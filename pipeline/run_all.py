@@ -1,6 +1,6 @@
 """Run every pipeline step. Usage: python -m pipeline.run_all [step ...]
 
-Steps: schools, catchments, results, crime, prices, coverage.
+Steps: schools, catchments, results, crime, prices, coverage, basemap.
 A failing step is reported and the others still run, so one slow or broken
 source never blocks the rest of the site's data.
 """
@@ -11,7 +11,7 @@ import time
 import traceback
 
 from .common import SITE_DATA
-from . import catchments, coverage, crime, prices, results, schools
+from . import basemap, catchments, coverage, crime, prices, results, schools
 
 STEPS = {
     "schools": schools.run,
@@ -20,10 +20,11 @@ STEPS = {
     "crime": crime.run,
     "prices": prices.run,
     "coverage": coverage.run,
+    "basemap": basemap.run,
 }
 
 # Steps that take a long time; a push-triggered run reuses their last output.
-SLOW = {"crime": "crime.json", "prices": "sales.json"}
+SLOW = {"crime": "crime.json", "prices": "sales.json", "basemap": "basemap.json"}
 
 
 def main(argv):
