@@ -60,12 +60,106 @@ function store(key, val) { try { localStorage.setItem(key, JSON.stringify(val));
 function restore(key) { try { return JSON.parse(localStorage.getItem(key)); } catch { return null; } }
 
 // ---------- map ----------
+// OFFLINE is set by pages that cannot reach outside services (such as a sandboxed preview):
+// the map then draws homes from the sold-price data instead of map tiles, and postcodes are
+// looked up in a local file instead of postcodes.io.
+const OFFLINE = !!window.SF_OFFLINE;
 const map = L.map("map", { zoomControl: true, preferCanvas: true }).setView([51.385, -0.24], 12);
-L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
-  maxZoom: 19,
-  subdomains: "abcd",
-  attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
-}).addTo(map);
+if (!OFFLINE) {
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
+    maxZoom: 19,
+    subdomains: "abcd",
+    attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
+  }).addTo(map);
+} else {
+  map.attributionControl.addAttribution("Homes from HM Land Registry sales (no street map in preview)");
+  drawOfflineBase();
+}
+
+// A street-free base map: every sold home as a faint dot, plus town names.
+const TOWNS = [
+  ["Kingston", 51.4123, -0.3007], ["Surbiton", 51.3937, -0.3033], ["New Malden", 51.4027, -0.2560],
+  ["Tolworth", 51.3800, -0.2800], ["Chessington", 51.3600, -0.3000], ["Worcester Park", 51.3790, -0.2440],
+  ["Cheam", 51.3600, -0.2140], ["Sutton", 51.3618, -0.1945], ["Carshalton", 51.3680, -0.1660],
+  ["Wallington", 51.3600, -0.1500], ["Belmont", 51.3440, -0.2000], ["Norbiton", 51.4100, -0.2840],
+];
+async function drawOfflineBase() {
+  const sales = await getLazy("sales");
+  const pts = (sales?.rows || []).map((r) => [r[0], r[1]]);
+  const Dots = L.GridLayer.extend({
+    createTile(coords) {
+      const tile = document.createElement("canvas");
+      const size = this.getTileSize();
+      tile.width = size.x; tile.height = size.y;
+      const ctx = tile.getContext("2d");
+      const dark = matchMedia("(prefers-color-scheme: dark)").matches && document.documentElement.dataset.theme !== "light"
+        || document.documentElement.dataset.theme === "dark";
+      ctx.fillStyle = dark ? "rgba(160,190,200,.28)" : "rgba(60,80,100,.22)";
+      const nw = coords.scaleBy(size);
+      const r = Math.max(1, (coords.z - 11) * 0.6);
+      for (const [lat, lon] of pts) {
+        const p = map.project([lat, lon], coords.z).subtract(nw);
+        if (p.x < -3 || p.y < -3 || p.x > size.x + 3 || p.y > size.y + 3) continue;
+        ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, 6.283); ctx.fill();
+      }
+      return tile;
+    },
+  });
+  new Dots({ pane: "tilePane" }).addTo(map);
+  for (const [name, lat, lon] of TOWNS) {
+    L.marker([lat, lon], { interactive: false, keyboard: false,
+      icon: L.divIcon({ className: "", html: `<span class="town-label">${name}</span>`, iconAnchor: [30, 8] }) }).addTo(map);
+  }
+}
+
+// ---------- postcodes ----------
+let localPostcodes = null;
+async function postcodeTable() {
+  if (!localPostcodes) localPostcodes = (await loadJSON("postcodes")) || {};
+  return localPostcodes;
+}
+const normPC = (q) => q.toUpperCase().replace(/\s+/g, "").replace(/^(.+)(\d[A-Z]{2})$/, "$1 $2");
+async function lookupPostcode(q) {
+  if (!OFFLINE) {
+    try {
+      const r = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(q)}`);
+      const j = await r.json();
+      if (j.result) return { lat: j.result.latitude, lon: j.result.longitude, postcode: j.result.postcode };
+    } catch {}
+  }
+  const table = await postcodeTable();
+  const pc = normPC(q);
+  if (table[pc]) return { lat: table[pc][0], lon: table[pc][1], postcode: pc };
+  // Fall back to the centre of the postcode sector or district (e.g. "KT3 3" or "KT3").
+  const prefix = pc.replace(/[A-Z]{2}$/, "").trim();
+  for (const pre of [prefix, prefix.split(" ")[0]]) {
+    if (!pre) continue;
+    const hits = Object.entries(table).filter(([k, v]) => v && (k.startsWith(pre + " ") || k.startsWith(pre)));
+    if (hits.length) {
+      const lat = hits.reduce((a, [, v]) => a + v[0], 0) / hits.length;
+      const lon = hits.reduce((a, [, v]) => a + v[1], 0) / hits.length;
+      return { lat, lon, postcode: pre.length < pc.length ? `${pre} (area centre)` : pc };
+    }
+  }
+  return null;
+}
+async function nearestPostcode(lat, lon) {
+  if (!OFFLINE) {
+    try {
+      const r = await fetch(`https://api.postcodes.io/postcodes?lon=${lon}&lat=${lat}&limit=1&radius=300`);
+      const j = await r.json();
+      if (j.result?.[0]?.postcode) return j.result[0].postcode;
+    } catch {}
+  }
+  const table = await postcodeTable();
+  let best = null;
+  for (const [k, v] of Object.entries(table)) {
+    if (!v) continue;
+    const d = distM(lat, lon, v[0], v[1]);
+    if (d < 300 && (!best || d < best.d)) best = { k, d };
+  }
+  return best?.k || null;
+}
 const schoolLayer = L.layerGroup().addTo(map);
 const ringLayer = L.layerGroup().addTo(map);
 const homeLayer = L.layerGroup().addTo(map);
@@ -134,12 +228,7 @@ function setHome(lat, lon, postcode) {
 
 map.on("click", async (e) => {
   const { lat, lng } = e.latlng;
-  let pc = null;
-  try {
-    const r = await fetch(`https://api.postcodes.io/postcodes?lon=${lng}&lat=${lat}&limit=1&radius=300`);
-    const j = await r.json();
-    pc = j.result?.[0]?.postcode || null;
-  } catch {}
+  const pc = await nearestPostcode(lat, lng);
   setHome(lat, lng, pc);
   showArea();
 });
@@ -571,16 +660,19 @@ function footer() {
 $("#search").addEventListener("submit", async (e) => {
   e.preventDefault();
   const q = $("#postcode").value.trim();
+  const msg = $("#search-msg");
+  msg.hidden = true;
   if (!q) return;
-  try {
-    const r = await fetch(`https://api.postcodes.io/postcodes/${encodeURIComponent(q)}`);
-    const j = await r.json();
-    if (!j.result) throw new Error(j.error || "Postcode not found");
-    setHome(j.result.latitude, j.result.longitude, j.result.postcode);
-    showArea();
-  } catch (err) {
-    alert(`Could not find that postcode: ${err.message}`);
+  const hit = await lookupPostcode(q);
+  if (!hit) {
+    msg.textContent = OFFLINE
+      ? `${q.toUpperCase()} isn't in the preview's postcode list. Try a Sutton or Kingston postcode such as KT3 3NU or SM2 6AA, or tap the map.`
+      : `Couldn't find ${q.toUpperCase()}. Check the postcode, or tap the map instead.`;
+    msg.hidden = false;
+    return;
   }
+  setHome(hit.lat, hit.lon, hit.postcode);
+  showArea();
 });
 
 // ---------- boot ----------
