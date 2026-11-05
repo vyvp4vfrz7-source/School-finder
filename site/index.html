@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>School Finder · Sutton and Kingston pilot</title>
+  <meta name="description" content="Find schools, estimated catchments, exam results, crime, mobile signal and sold prices around any address in Sutton and Kingston upon Thames.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="School Finder home">
+      <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M12 3 1 9l11 6 9-4.9V17h2V9L12 3zm-7 9.2v4L12 20l7-3.8v-4L12 16l-7-3.8z"/></svg>
+      <span>School Finder</span>
+      <span class="pill">Sutton &amp; Kingston pilot</span>
+    </a>
+    <form id="search" class="search" autocomplete="off">
+      <label for="postcode" class="visually-hidden">Postcode</label>
+      <input id="postcode" name="postcode" type="search" placeholder="Enter a postcode, e.g. KT3 3NU" inputmode="text" autocapitalize="characters">
+      <button type="submit">Check area</button>
+      <p id="search-msg" class="search-msg" role="status" hidden></p>
+    </form>
+  </header>
+
+  <main class="layout">
+    <aside id="panel" class="panel" aria-live="polite"></aside>
+    <div id="map" class="map" role="application" aria-label="Map of schools"></div>
+  </main>
+
+  <template id="tpl-home">
+    <section class="intro">
+      <h1>Find the right school, then the right home</h1>
+      <p>Search a postcode, or tap the map, to see which secondary schools you would likely get into based on recent "last distance offered" figures, plus exam results, crime, mobile signal and recent sold prices nearby.</p>
+    </section>
+    <section class="filters" aria-label="Filters">
+      <div class="chips" id="phase-chips"></div>
+      <div class="toggles">
+        <label><input type="checkbox" id="f-state" checked> State</label>
+        <label><input type="checkbox" id="f-indep"> Independent</label>
+        <label><input type="checkbox" id="f-special"> Special</label>
+        <label><input type="checkbox" id="f-catch"> With catchment data</label>
+      </div>
+    </section>
+    <section>
+      <div class="list-head">
+        <h2 class="list-title"><span id="list-count"></span></h2>
+        <label class="sort"><span class="visually-hidden">Sort schools</span>
+          <select id="sort">
+            <option value="name">A to Z</option>
+            <option value="sats">Best primary SATs</option>
+            <option value="gcse">Best GCSE results</option>
+            <option value="alevel">Best A-level results</option>
+          </select>
+        </label>
+      </div>
+      <ul class="school-list" id="school-list"></ul>
+    </section>
+  </template>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+  <script src="app.js" type="module"></script>
+</body>
+</html>

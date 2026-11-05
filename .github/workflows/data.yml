@@ -1,0 +1,56 @@
+name: Refresh data
+
+on:
+  workflow_dispatch:
+    inputs:
+      steps:
+        description: "Steps to run (space separated: schools catchments results crime prices coverage). Blank runs all."
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 5 2 * *" # 05:00 UTC on the 2nd of each month
+  push:
+    branches-ignore: [main]
+    paths:
+      - "pipeline/**"
+      - "data/manual/**"
+      - ".github/workflows/data.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: data-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+      - run: pip install -r pipeline/requirements.txt
+      - name: Run pipeline
+        env:
+          OFCOM_API_KEY: ${{ secrets.OFCOM_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+          QUICK: ${{ github.event_name == 'push' && '1' || '0' }}
+        run: python -m pipeline.run_all ${{ github.event.inputs.steps }}
+      - name: Commit refreshed data
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add site/data data/cache
+          if git diff --cached --quiet; then
+            echo "No data changes"
+          else
+            git commit -m "Refresh data ($(date -u +%Y-%m-%d))"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
