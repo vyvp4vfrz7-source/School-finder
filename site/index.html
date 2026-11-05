@@ -46,7 +46,16 @@
       </div>
     </section>
     <section>
-      <h2 class="list-title"><span id="list-count"></span></h2>
+      <div class="list-head">
+        <h2 class="list-title"><span id="list-count"></span></h2>
+        <label class="sort"><span class="visually-hidden">Sort schools</span>
+          <select id="sort">
+            <option value="name">A to Z</option>
+            <option value="gcse">Best GCSE results</option>
+            <option value="alevel">Best A-level results</option>
+          </select>
+        </label>
+      </div>
       <ul class="school-list" id="school-list"></ul>
     </section>
   </template>

@@ -18,6 +18,18 @@ from .common import SITE_DATA, get, read_json, write_json
 CATALOGUE = "https://explore-education-statistics.service.gov.uk/data-catalogue/data-set"
 
 DATASETS = {
+    "ks2": {
+        # "Key stage 2 institutional level - Schools (performance)" (2022/23 onwards).
+        # One row per subject, so measures are picked per subject below.
+        "id": "f6cb50e9-0eca-4b1e-ac1a-6f6bb9d21a07",
+        "filters": {"breakdown_topic": "all pupils", "breakdown": "total"},
+        "by_subject": {
+            "reading, writing and maths": {"rwm": "expected_standard_pupil_percent",
+                                            "rwmHigh": "higher_standard_pupil_percent"},
+            "reading": {"read": "average_scaled_score"},
+            "maths": {"maths": "average_scaled_score"},
+        },
+    },
     "ks4": {
         # "Key stage 4 institution level - Performance" (2023/24 onwards)
         "id": "bf138f04-daa2-4759-b950-937a17a4c675",
@@ -79,6 +91,8 @@ def parse(text, cfg, urns):
     reader = csv.DictReader(io.StringIO(text))
     cols = {c.lower(): c for c in reader.fieldnames}
     urn_col = cols.get("school_urn") or cols.get("urn")
+    if "by_subject" in cfg:
+        return parse_by_subject(reader, cols, urn_col, cfg, urns)
     mcols = {k: next((cols[c] for c in cands if c in cols), None) for k, cands in cfg["measures"].items()}
     fcols = {cols[c]: v for c, v in cfg["filters"].items() if c in cols}
     print(f"    measures: {mcols}")
@@ -105,6 +119,38 @@ def parse(text, cfg, urns):
     if not out:
         print(f"    no rows kept; filter values seen: { {k: sorted(map(str, v))[:12] for k, v in seen_vals.items()} }")
     return out
+
+
+def parse_by_subject(reader, cols, urn_col, cfg, urns):
+    fcols = {cols[c]: v for c, v in cfg["filters"].items() if c in cols}
+    subj_col = cols.get("subject")
+    print(f"    filters: {fcols}, subject column: {subj_col}")
+    out, subjects = {}, set()
+    for row in reader:
+        try:
+            urn = int(row[urn_col])
+        except (TypeError, ValueError):
+            continue
+        if urn not in urns:
+            continue
+        subj = (row.get(subj_col) or "").strip().lower()
+        subjects.add(subj)
+        if subj not in cfg["by_subject"]:
+            continue
+        if any((row.get(c) or "").strip().lower() != v for c, v in fcols.items()):
+            continue
+        tp = (row.get(cols.get("time_period", "")) or "").strip()
+        if len(tp) != 6:
+            continue
+        rec = out.setdefault(str(urn), {}).setdefault(str(int(tp[:4]) + 1), {})
+        for key, col in cfg["by_subject"][subj].items():
+            if col in cols:
+                v = to_num(row.get(cols[col]))
+                if v is not None:
+                    rec[key] = v
+    if not out:
+        print(f"    no rows kept; subjects seen: {sorted(subjects)[:20]}")
+    return {u: {y: r for y, r in ys.items() if r} for u, ys in out.items()}
 
 
 def run():

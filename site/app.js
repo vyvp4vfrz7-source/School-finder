@@ -65,6 +65,7 @@ function restore(key) { try { return JSON.parse(localStorage.getItem(key)); } ca
 // looked up in a local file instead of postcodes.io.
 const OFFLINE = !!window.SF_OFFLINE;
 const map = L.map("map", { zoomControl: true, preferCanvas: true }).setView([51.385, -0.24], 12);
+map.attributionControl.setPrefix(false); // keep the data credits, drop the "Leaflet" library link
 if (!OFFLINE) {
   L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
     maxZoom: 19,
@@ -72,7 +73,6 @@ if (!OFFLINE) {
     attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions">CARTO</a>',
   }).addTo(map);
 } else {
-  map.attributionControl.addAttribution("Homes from HM Land Registry sales (no street map in preview)");
   drawOfflineBase();
 }
 
@@ -83,7 +83,90 @@ const TOWNS = [
   ["Cheam", 51.3600, -0.2140], ["Sutton", 51.3618, -0.1945], ["Carshalton", 51.3680, -0.1660],
   ["Wallington", 51.3600, -0.1500], ["Belmont", 51.3440, -0.2000], ["Norbiton", 51.4100, -0.2840],
 ];
+const BASE_STYLE = {
+  light: { land: "#f3f1ec", green: "#dcebd3", water: "#bcd7e8", rail: "#a6a29a", minor: "#ffffff", minorEdge: "#dedad2",
+           mid: "#ffffff", midEdge: "#d2ccc0", major: "#fbe3a6", majorEdge: "#e2c27a", dot: "rgba(60,80,100,.22)" },
+  dark: { land: "#1b2027", green: "#1f2c22", water: "#1d3242", rail: "#4a4f57", minor: "#2c333d", minorEdge: "#232931",
+          mid: "#38414d", midEdge: "#2a313a", major: "#5a4a2a", majorEdge: "#3e341f", dot: "rgba(160,190,200,.28)" },
+};
+function isDark() {
+  const t = document.documentElement.dataset.theme;
+  return t === "dark" || (t !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+}
 async function drawOfflineBase() {
+  const base = await getLazy("basemap");
+  if (base?.layers) {
+    drawVectorBase(base);
+    map.attributionControl.addAttribution('&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors');
+  } else {
+    drawHomeDots();
+    map.attributionControl.addAttribution("Dots are homes sold (HM Land Registry)");
+  }
+  for (const [name, lat, lon] of TOWNS) {
+    L.marker([lat, lon], { interactive: false, keyboard: false,
+      icon: L.divIcon({ className: "", html: `<span class="town-label">${name}</span>`, iconAnchor: [30, 8] }) }).addTo(map);
+  }
+}
+
+function bboxOf(flat) {
+  let s = 90, w = 180, n = -90, e = -180;
+  for (let i = 0; i < flat.length; i += 2) {
+    if (flat[i] < s) s = flat[i]; if (flat[i] > n) n = flat[i];
+    if (flat[i + 1] < w) w = flat[i + 1]; if (flat[i + 1] > e) e = flat[i + 1];
+  }
+  return [s, w, n, e];
+}
+
+function drawVectorBase(base) {
+  const layers = {};
+  for (const [k, list] of Object.entries(base.layers)) layers[k] = list.map((f) => ({ f, b: bboxOf(f) }));
+  const Base = L.GridLayer.extend({
+    createTile(coords) {
+      const tile = document.createElement("canvas");
+      const size = this.getTileSize();
+      const ratio = window.devicePixelRatio || 1;
+      tile.width = size.x * ratio; tile.height = size.y * ratio;
+      const ctx = tile.getContext("2d");
+      ctx.scale(ratio, ratio);
+      const st = BASE_STYLE[isDark() ? "dark" : "light"];
+      const z = coords.z;
+      const nw = coords.scaleBy(size);
+      const sw = map.unproject(nw.add([0, size.y]), z), ne = map.unproject(nw.add([size.x, 0]), z);
+      const pad = 0.002;
+      const inView = (b) => !(b[2] < sw.lat - pad || b[0] > ne.lat + pad || b[3] < sw.lng - pad || b[1] > ne.lng + pad);
+      const path = (f) => {
+        ctx.beginPath();
+        for (let i = 0; i < f.length; i += 2) {
+          const p = map.project([f[i], f[i + 1]], z).subtract(nw);
+          i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y);
+        }
+      };
+      ctx.fillStyle = st.land; ctx.fillRect(0, 0, size.x, size.y);
+      const fill = (key, color) => {
+        ctx.fillStyle = color;
+        for (const { f, b } of layers[key] || []) if (inView(b)) { path(f); ctx.closePath(); ctx.fill(); }
+      };
+      const stroke = (key, color, width, dash) => {
+        ctx.strokeStyle = color; ctx.lineWidth = width; ctx.lineCap = "round"; ctx.lineJoin = "round";
+        ctx.setLineDash(dash || []);
+        for (const { f, b } of layers[key] || []) if (inView(b)) { path(f); ctx.stroke(); }
+        ctx.setLineDash([]);
+      };
+      fill("green", st.green);
+      fill("water", st.water);
+      stroke("river", st.water, Math.max(2, (z - 10) * 1.6));
+      const k = Math.max(0.4, (z - 11) * 0.9);
+      if (z >= 13) { stroke("minor", st.minorEdge, 1.6 * k + 1); stroke("minor", st.minor, 1.6 * k); }
+      stroke("mid", st.midEdge, 2.2 * k + 1.2); stroke("mid", st.mid, 2.2 * k);
+      stroke("major", st.majorEdge, 3 * k + 1.5); stroke("major", st.major, 3 * k);
+      stroke("rail", st.rail, 1.2, [4, 3]);
+      return tile;
+    },
+  });
+  new Base({ pane: "tilePane", maxZoom: 19 }).addTo(map);
+}
+
+async function drawHomeDots() {
   const sales = await getLazy("sales");
   const pts = (sales?.rows || []).map((r) => [r[0], r[1]]);
   const Dots = L.GridLayer.extend({
@@ -92,9 +175,7 @@ async function drawOfflineBase() {
       const size = this.getTileSize();
       tile.width = size.x; tile.height = size.y;
       const ctx = tile.getContext("2d");
-      const dark = matchMedia("(prefers-color-scheme: dark)").matches && document.documentElement.dataset.theme !== "light"
-        || document.documentElement.dataset.theme === "dark";
-      ctx.fillStyle = dark ? "rgba(160,190,200,.28)" : "rgba(60,80,100,.22)";
+      ctx.fillStyle = BASE_STYLE[isDark() ? "dark" : "light"].dot;
       const nw = coords.scaleBy(size);
       const r = Math.max(1, (coords.z - 11) * 0.6);
       for (const [lat, lon] of pts) {
@@ -106,10 +187,6 @@ async function drawOfflineBase() {
     },
   });
   new Dots({ pane: "tilePane" }).addTo(map);
-  for (const [name, lat, lon] of TOWNS) {
-    L.marker([lat, lon], { interactive: false, keyboard: false,
-      icon: L.divIcon({ className: "", html: `<span class="town-label">${name}</span>`, iconAnchor: [30, 8] }) }).addTo(map);
-  }
 }
 
 // ---------- postcodes ----------
@@ -302,6 +379,12 @@ function renderHome() {
   };
   bind("#f-state", "showState"); bind("#f-indep", "showIndep");
   bind("#f-special", "showSpecial"); bind("#f-catch", "onlyCatch");
+  const sortSel = $("#sort");
+  if (state.home && !sortSel.querySelector('option[value="distance"]')) {
+    sortSel.insertAdjacentHTML("afterbegin", '<option value="distance">Nearest to you</option>');
+  }
+  sortSel.value = state.sort || (state.home ? "distance" : "name");
+  sortSel.onchange = () => { state.sort = sortSel.value; refreshList(); };
   if (state.home) {
     const btn = document.createElement("button");
     btn.className = "btn ghost small";
@@ -313,22 +396,44 @@ function renderHome() {
   panel.append(footer());
 }
 
+// Latest headline results for a school, for lists and tables.
+function headline(urn) {
+  const k4 = state.results.ks4?.[urn], k5 = state.results.ks5?.[urn];
+  const last = (o) => (o ? o[Object.keys(o).sort().at(-1)] : null);
+  const g = last(k4), a = last(k5);
+  return {
+    em5: g?.em5 ?? null, att8: g?.att8 ?? null,
+    alevel: a?.grade ?? null, aps: a?.aps ?? null,
+    text: [g?.em5 != null ? `GCSE ${Math.round(g.em5)}% grade 5+` : null, a?.grade ? `A level ${a.grade}` : null].filter(Boolean).join(" · "),
+  };
+}
+
 function refreshList() {
   drawMarkers();
   const list = $("#school-list");
   if (!list) return;
-  let items = state.schools.filter(visible);
-  if (state.home) {
-    items = items.map((s) => ({ s, d: distM(state.home.lat, state.home.lon, s.lat, s.lon) })).sort((a, b) => a.d - b.d);
-  } else {
-    items = items.map((s) => ({ s, d: null }));
-  }
-  $("#list-count").textContent = `${items.length} schools${state.home ? " · nearest first" : ""}`;
-  list.innerHTML = items.slice(0, 300).map(({ s, d }) => `
+  const sortBy = $("#sort")?.value || (state.home ? "distance" : "name");
+  let items = state.schools.filter(visible).map((s) => ({
+    s, d: state.home ? distM(state.home.lat, state.home.lon, s.lat, s.lon) : null, h: headline(s.urn),
+  }));
+  const desc = (k) => (a, b) => (b.h[k] ?? -1) - (a.h[k] ?? -1) || a.s.name.localeCompare(b.s.name);
+  const sorters = {
+    name: (a, b) => a.s.name.localeCompare(b.s.name),
+    distance: (a, b) => (a.d ?? 0) - (b.d ?? 0),
+    gcse: desc("em5"),
+    alevel: desc("aps"),
+  };
+  if (sortBy === "gcse") items = items.filter((x) => x.h.em5 != null);
+  if (sortBy === "alevel") items = items.filter((x) => x.h.aps != null);
+  items.sort(sorters[sortBy] || sorters.name);
+  const label = { name: "A to Z", distance: "nearest first", gcse: "best GCSE results first", alevel: "best A-level results first" }[sortBy];
+  $("#list-count").textContent = `${items.length} schools · ${label}`;
+  list.innerHTML = items.slice(0, 300).map(({ s, d, h }) => `
     <li tabindex="0" data-urn="${s.urn}">
       <span class="dot" style="background:${(PHASES[s.phase] || PHASES.secondary).color}"></span>
       <div><div class="name">${esc(s.name)}</div>
-      <div class="meta">${esc(PHASES[s.phase]?.label || "")} · ${esc(s.la)}${s.independent ? " · Independent" : ""}${s.selective ? " · Selective" : ""}${state.catchments[s.urn] ? " · Catchment data" : ""}</div></div>
+      <div class="meta">${esc(PHASES[s.phase]?.label || "")} · ${esc(s.la)}${s.independent ? " · Independent" : ""}${s.selective ? " · Selective" : ""}${state.catchments[s.urn] ? " · Catchment data" : ""}</div>
+      ${h.text ? `<div class="meta results">${esc(h.text)}</div>` : ""}</div>
       ${d != null ? `<div class="right">${fmtKm(d)}</div>` : ""}
     </li>`).join("");
   list.onclick = (e) => { const li = e.target.closest("li"); if (li) showSchool(+li.dataset.urn); };
@@ -486,7 +591,7 @@ async function showArea() {
   sec.innerHTML = `<h3>Secondary schools: your chances</h3>
     ${rows.length ? `<table class="t"><thead><tr><th>School</th><th class="n">Distance</th><th>Chance</th></tr></thead><tbody>
     ${rows.slice(0, 14).map((r) => `<tr data-urn="${r.s.urn}" style="cursor:pointer">
-      <td><a href="#" data-urn="${r.s.urn}">${esc(r.s.name)}</a>${r.extra ? `<div class="small muted">${esc(r.extra.label)}: ${r.extra.ch.label}</div>` : ""}</td>
+      <td><a href="#" data-urn="${r.s.urn}">${esc(r.s.name)}</a>${headline(r.s.urn).text ? `<div class="small muted">${esc(headline(r.s.urn).text)}</div>` : ""}${r.extra ? `<div class="small muted">${esc(r.extra.label)}: ${r.extra.ch.label}</div>` : ""}</td>
       <td class="n">${fmtKm(r.d)}</td><td><span class="verdict ${r.ch.cls}">${r.ch.label}</span></td></tr>`).join("")}
     </tbody></table>` : '<div class="empty">Catchment data has not been generated yet.</div>'}
     <p class="note">Based on councils' "last distance offered" over the last 3 to 5 years. Grammar and faith schools allocate by test or faith, so check their admissions rules.</p>`;
