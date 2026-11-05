@@ -1,5 +1,8 @@
-"""Download the DfE Get Information about Schools (GIAS) register and keep open
-schools in the pilot local authorities.
+"""Download the DfE Get Information about Schools (GIAS) register and keep every open
+school in England.
+
+Writes data/raw/schools_england.json (all of England, used by the tiles step) and
+data/cache/pilot_schools.json (the catchment pilot councils, used by the pilot steps).
 
 Source: https://get-information-schools.service.gov.uk/Downloads (Open Government Licence)
 """
@@ -14,7 +17,7 @@ import zipfile
 
 from pyproj import Transformer
 
-from .common import LAS, RAW, SITE_DATA, get, session, write_json
+from .common import LAS, PILOT_SCHOOLS, RAW, get, session, write_json
 
 GIAS = "https://get-information-schools.service.gov.uk"
 GIAS_FILE = "https://ea-edubase-api-prod.azurewebsites.net/edubase/downloads/File.xhtml?id={id}"
@@ -98,13 +101,17 @@ def run():
     text, stamp = download()
     reader = csv.DictReader(io.StringIO(text))
     out = []
+    skipped_wales = 0
     for row in reader:
-        if row["LA (code)"] not in LAS:
-            continue
         if not row["EstablishmentStatus (name)"].startswith("Open"):
             continue
         group = row["EstablishmentTypeGroup (name)"]
-        if group in ("Children's centres", "Online provider", "Other types"):
+        if group in ("Children's centres", "Online provider", "Other types", "Welsh schools"):
+            continue
+        # GIAS also lists some Welsh establishments; this site covers England only.
+        if (row.get("GOR (name)") or "").startswith("Wales") or \
+                "welsh" in (row.get("TypeOfEstablishment (name)") or "").lower():
+            skipped_wales += 1
             continue
         try:
             e, n = float(row["Easting"]), float(row["Northing"])
@@ -117,7 +124,9 @@ def run():
         out.append({
             "urn": int(row["URN"]),
             "name": row["EstablishmentName"].strip(),
-            "la": LAS[row["LA (code)"]],
+            "la": (row.get("LA (name)") or "").strip(),
+            "laCode": row["LA (code)"],
+            "town": clean(row.get("Town")),
             "phase": phase_group(row),
             "type": clean(row["TypeOfEstablishment (name)"]),
             "group": clean(group),
@@ -139,13 +148,17 @@ def run():
             "lon": round(lon, 6) if lon else None,
         })
     out.sort(key=lambda s: s["name"])
-    print(f"  {len(out)} open schools in pilot area")
-    write_json(SITE_DATA / "schools.json", {
+    no_loc = sum(1 for s in out if s["lat"] is None)
+    print(f"  {len(out)} open schools in England ({no_loc} without a location; {skipped_wales} Welsh rows skipped)")
+    meta = {
         "source": "DfE Get Information about Schools",
         "sourceUrl": "https://get-information-schools.service.gov.uk/",
         "fileDate": stamp,
-        "schools": out,
-    })
+    }
+    write_json(RAW / "schools_england.json", {**meta, "schools": out})
+    pilot = [s for s in out if s["laCode"] in LAS]
+    print(f"  {len(pilot)} of them in the catchment pilot councils")
+    write_json(PILOT_SCHOOLS, {**meta, "schools": pilot})
 
 
 def _is_num(v):

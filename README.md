@@ -1,27 +1,47 @@
 # School Finder
 
-A school and property map for families, in the spirit of Locrating. The pilot covers
-**Sutton** and **Kingston upon Thames**; the pipeline is built so more councils can be added later.
+A school and property map for families, in the spirit of Locrating. It covers **all of England**
+for schools, results, Ofsted, crime and sold prices. Catchment estimates cover **Sutton** and
+**Kingston upon Thames** so far, because councils publish them only as PDFs.
 
 What it shows:
 
-- **Schools** from the DfE register (state, independent and special; primary to sixth form).
-- **Estimated catchments** for secondary schools, drawn from the councils' "last distance
-  offered" figures for each of the last 3 to 5 years, with a Likely / Borderline / Unlikely
-  verdict for any postcode.
-- **GCSE and A-level results trends**: Attainment 8 and grade 5+ English and maths for 2024 to 2026,
-  and A-level average grade and AAB rate for 2022 to 2025 (the years DfE's current school-level data sets hold).
-- **Crime** within 500 m from police.uk, with a 3-year trend and the most common crime types.
-- **Sold prices** within 500 m from HM Land Registry, by property type and by year.
-- **Mobile signal** by operator from Ofcom (needs a free API key, see below).
+- **Schools** from the DfE register, all of England (state, independent and special; primary to sixth form).
+- **Exam results trends**: SATs, GCSE (Attainment 8, grade 5+ English and maths) and A level
+  (average grade, AAB rate), for the years DfE's current school-level data sets hold.
+- **Ofsted**: the latest inspection outcome, under whichever scheme it was made (graded with an
+  overall grade, graded without one from September 2024, or a report card from November 2025).
+- **Crime** within 500 m, asked live from police.uk, with a 3-year trend, the most common crime
+  types, and how it compares with school neighbourhoods across England.
+- **Sold prices** within 500 m, asked live from HM Land Registry, by property type and by year.
+- **Estimated catchments** (Sutton and Kingston) for secondary schools, from the councils'
+  "last distance offered" figures for the last 3 to 5 years, with a Likely / Borderline /
+  Unlikely verdict for any postcode.
+- **Mobile signal** by operator from Ofcom (pilot area only; needs a free API key, see below).
 - **Links to Rightmove and Zoopla** for homes for sale in the postcode district. Listings are not scraped.
+
+## What is copied and what is live
+
+| Data | How the site gets it | Why |
+|---|---|---|
+| Postcodes, towns | Live from postcodes.io in the browser | Free API that allows browser requests |
+| Crime | Live from police.uk in the browser (36 small requests per area) | Free API; copying all of England would be tens of millions of rows |
+| Sold prices | Live from Land Registry's SPARQL endpoint, for the postcodes postcodes.io lists within 500 m | Free query endpoint |
+| Schools, results, Ofsted | Downloaded monthly by the pipeline, split into map tiles | DfE and Ofsted publish bulk files only, with no query API |
+| Catchments | Typed in by hand from council booklets | Not published as data anywhere |
+
+The **Refresh data** workflow's `probe` step checks each month that the live sources still answer
+and still allow browser requests. If one stops, the site falls back to the pilot's stored files
+where it has them. Scotland, Wales and Northern Ireland publish school data in different systems
+and are not covered yet.
 
 ## How it is built
 
 ```
 data/manual/        hand-collected catchment figures and their sources (edit these)
-data/cache/         postcode and coverage lookups, kept so monthly runs are quick
+data/cache/         pilot schools, postcode and coverage lookups, kept so monthly runs are quick
 pipeline/           Python scripts that download open data and write site/data/*.json
+site/data/tiles/    schools, results and Ofsted for England, in 0.25 degree squares
 site/               the static website (HTML, CSS, one JS file, Leaflet map)
 .github/workflows/  data refresh (monthly and on change) and GitHub Pages deploy
 ```
@@ -36,8 +56,8 @@ python -m pipeline.run_all            # all steps, or e.g. `python -m pipeline.r
 python -m http.server -d site 8000    # then open http://localhost:8000
 ```
 
-The full run takes a while because crime is fetched month by month and the Land Registry
-files are large. In GitHub the **Refresh data** workflow does this and commits the results.
+The full run takes a while: the national results files are large, and the pilot's crime
+and price fallbacks are fetched month by month. In GitHub the **Refresh data** workflow does this and commits the results.
 
 ### Add or update catchment figures
 
@@ -49,10 +69,11 @@ files are large. In GitHub the **Refresh data** workflow does this and commits t
 3. Add the document to `data/manual/catchment_sources.csv` and reference its id.
 4. Push. The workflow rebuilds `site/data/catchments.json`, and fails if a name does not match.
 
-### Add another area
+### Add catchments for another council
 
-Add the council's DfE local authority code to `LAS` and its Land Registry district name to
-`LR_DISTRICTS` in `pipeline/common.py`, then add its catchment rows.
+Schools, results and Ofsted already cover England. To add catchment estimates for another
+council, add its DfE local authority code to `LAS` in `pipeline/common.py` and its rows to
+`data/manual/catchments.csv`.
 
 ### Mobile coverage
 
@@ -71,6 +92,7 @@ to `main` then deploys `site/`.
 |---|---|---|
 | Schools | [DfE Get Information about Schools](https://get-information-schools.service.gov.uk/) | OGL v3 |
 | Results | [DfE Explore Education Statistics](https://explore-education-statistics.service.gov.uk/) | OGL v3 |
+| Ofsted | [Ofsted monthly management information](https://www.gov.uk/government/statistical-data-sets/monthly-management-information-ofsteds-school-inspections-outcomes) | OGL v3 |
 | Catchments | Kingston and Sutton council admissions publications (see `data/manual/catchment_sources.csv`) | Published by the councils |
 | Crime | [police.uk](https://data.police.uk/) | OGL v3 |
 | Sold prices | [HM Land Registry Price Paid Data](https://www.gov.uk/government/statistical-data-sets/price-paid-data-downloads) | OGL v3 |
@@ -87,4 +109,6 @@ The CARTO basemap is fine for a prototype; a commercial launch should use a paid
 - Kingston 2025 shows "Overseas" for three schools, which the pipeline treats as unclear.
 - Sutton's current offer-day page has no year label; it is recorded as 2026 entry.
 - Primary school catchments are not collected yet.
-- Ofsted's new report cards (from November 2025) are linked out, not shown.
+- Independent schools' inspections are not in Ofsted's state school file, so they show a link only.
+- Live crime and price lookups depend on police.uk and Land Registry being up; each area takes a
+  few seconds to load.
