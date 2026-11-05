@@ -13,15 +13,13 @@ import io
 import re
 import zipfile
 
-from .common import RAW, SITE_DATA, get, read_json, write_json
-
-CONTENT_API = "https://content.explore-education-statistics.service.gov.uk/api"
+from .common import SITE_DATA, get, read_json, write_json
 
 KS4 = {
     "publication": "key-stage-4-performance",
     # Exams were cancelled in 2020 and 2021, so there is no 2019-20 or 2020-21.
     "releases": ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22"],
-    "file_patterns": [r"institution level.*performance", r"school level.*performance", r"ks4.*institution"],
+    "file_patterns": [r"institution level.*\(performance\)", r"schools and colleges.*performance", r"schools \(performance\)", r"institution level", r"school level"],
     "measures": {
         # output key: candidate column names (first match wins)
         "att8": ["avg_att8", "att8scr", "attainment_8"],
@@ -36,7 +34,7 @@ KS4 = {
 KS5 = {
     "publication": "a-level-and-other-16-to-18-results",
     "releases": ["2025-26", "2024-25", "2023-24", "2022-23", "2021-22"],
-    "file_patterns": [r"institution level.*performance", r"school level.*performance", r"16.?18.*institution"],
+    "file_patterns": [r"institution level.*\(performance\)", r"schools and colleges.*performance", r"institution level", r"school level"],
     "measures": {
         "aps": ["aps_per_entry_alevel", "tallppe_alev_1618", "alevel_aps_per_entry", "aps_alev"],
         "grade": ["aps_per_entry_alevel_grade", "tallppegrd_alev_1618", "alevel_aps_grade"],
@@ -46,42 +44,47 @@ KS5 = {
 }
 
 
-def release_files(publication, release):
-    url = f"{CONTENT_API}/publications/{publication}/releases/{release}"
-    r = get(url)
-    if r.status_code != 200:
-        print(f"    {publication} {release}: release not found (HTTP {r.status_code})")
-        return None, []
-    data = r.json()
-    files = data.get("downloadFiles") or data.get("files") or []
-    return data.get("id"), files
+CATALOGUE = "https://explore-education-statistics.service.gov.uk/data-catalogue"
 
 
-def pick_file(files, patterns):
+def release_datasets(publication, release):
+    """Scrape the release's data catalogue pages for (id, title) pairs."""
+    found = {}
+    for page in range(1, 8):
+        r = get(f"{CATALOGUE}/{publication}/{release}", params={"page": page})
+        if r.status_code != 200:
+            if page == 1:
+                print(f"    {release}: catalogue page not found (HTTP {r.status_code})")
+            break
+        before = len(found)
+        for m in re.finditer(r'href="/data-catalogue/data-set/([0-9a-f-]{36})"[^>]*>(.*?)</a>', r.text, re.S):
+            title = re.sub(r"<[^>]+>", " ", m.group(2))
+            found.setdefault(m.group(1), re.sub(r"\s+", " ", title).strip())
+        if len(found) == before:
+            break
+    return found
+
+
+def pick_dataset(datasets, patterns):
     for pat in patterns:
-        for f in files:
-            name = f"{f.get('name', '')} {f.get('fileName', '')}".lower()
-            if re.search(pat, name) and (f.get("extension") or "csv").lower() in ("csv", "zip"):
-                return f
-    return None
+        for ds_id, title in datasets.items():
+            t = title.lower()
+            if re.search(pat, t) and not re.search(r"national|subject|information|destination|characteristic", t):
+                return ds_id, title
+    return None, None
 
 
-def download_csv(release_id, f):
-    urls = [
-        f"{CONTENT_API}/releases/{release_id}/files/{f['id']}",
-        f"https://explore-education-statistics.service.gov.uk/data-catalogue/data-set/{f['id']}/csv",
-    ]
-    for url in urls:
-        r = get(url, timeout=600)
-        if r.status_code == 200 and r.content:
-            content = r.content
-            if content[:2] == b"PK":
-                with zipfile.ZipFile(io.BytesIO(content)) as z:
-                    csvs = [n for n in z.namelist() if n.lower().endswith(".csv") and "meta" not in n.lower()]
-                    content = z.read(max(csvs, key=lambda n: z.getinfo(n).file_size))
-            return content.decode("utf-8-sig", errors="replace")
-        print(f"    download failed {url}: HTTP {r.status_code}")
-    return None
+def download_csv(ds_id):
+    r = get(f"{CATALOGUE}/data-set/{ds_id}/csv", timeout=600)
+    if r.status_code != 200 or not r.content:
+        print(f"    download failed for {ds_id}: HTTP {r.status_code}")
+        return None
+    content = r.content
+    if content[:2] == b"PK":
+        with zipfile.ZipFile(io.BytesIO(content)) as z:
+            csvs = [n for n in z.namelist() if n.lower().endswith(".csv") and "meta" not in n.lower()]
+            content = z.read(max(csvs, key=lambda n: z.getinfo(n).file_size))
+    return content.decode("utf-8-sig", errors="replace")
 
 
 def to_num(v):
@@ -132,21 +135,20 @@ def parse(text, measures, urns):
 def collect(cfg, urns):
     years = {}
     for rel in cfg["releases"]:
-        rid, files = release_files(cfg["publication"], rel)
-        if not rid:
+        datasets = release_datasets(cfg["publication"], rel)
+        if not datasets:
             continue
-        f = pick_file(files, cfg["file_patterns"])
-        if not f:
-            print(f"    {rel}: no institution-level file among {[x.get('name') for x in files]}")
+        ds_id, title = pick_dataset(datasets, cfg["file_patterns"])
+        if not ds_id:
+            print(f"    {rel}: no institution-level data set among: {sorted(datasets.values())}")
             continue
-        print(f"    {rel}: using {f.get('name')}")
-        text = download_csv(rid, f)
+        print(f"    {rel}: using '{title}' ({ds_id})")
+        text = download_csv(ds_id)
         if not text:
             continue
-        RAW.mkdir(parents=True, exist_ok=True)
-        (RAW / f"{cfg['publication']}-{rel}.csv").write_text(text[:2_000_000])
         # Label by the summer the exams were sat, e.g. 2024-25 -> 2025.
         years[int(rel[:4]) + 1] = parse(text, cfg["measures"], urns)
+        print(f"    {rel}: {len(years[int(rel[:4]) + 1])} pilot schools")
     return years
 
 

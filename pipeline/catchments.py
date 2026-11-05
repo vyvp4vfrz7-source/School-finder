@@ -22,8 +22,10 @@ def norm(name):
     return re.sub(r"\s+", " ", n).strip()
 
 
-def match(name, la, schools):
+def match(name, la, schools, phases=None):
     pool = [s for s in schools if s["la"] == la] or schools
+    if phases:
+        pool = [s for s in pool if s["phase"] in phases]
     by_norm = {}
     for s in pool:
         by_norm.setdefault(norm(s["name"]), s)
@@ -43,7 +45,7 @@ def run():
 
     out, unmatched = {}, set()
     for r in rows:
-        s = match(r["school"], r["la"], schools)
+        s = match(r["school"], r["la"], schools, phases=("secondary", "all-through"))
         if not s:
             unmatched.add(f"{r['school']} ({r['la']})")
             continue
